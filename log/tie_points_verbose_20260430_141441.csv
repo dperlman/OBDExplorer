@@ -1,0 +1,1 @@
+run_started_at,n,compute_sec,write_sec,iter_total_sec,tie_points,local_min,max_local_min_p,hit_eps_floor,deadzone_used,deadzone_ambiguous,shape_fit_attempted,shape_fit_resolved,shape_fit_nonconcave,shape_fit_failed,ulp_step_adjusted,eps_ulps_bumped

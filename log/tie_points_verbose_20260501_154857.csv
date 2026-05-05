@@ -1,0 +1,2 @@
+run_started_at,n,compute_sec,write_sec,iter_total_sec,tie_points,local_min,max_local_min_p,hit_eps_floor,deadzone_used,deadzone_ambiguous,ulp_step_adjusted,eps_ulps_bumped,hp_3point_sec,high_precision_points,hp_3point_attempted,hp_3point_resolved,hp_3point_failed,hp_flat_tol_scale
+2026-05-01 15:48:57,2,0.000404,0.000390,0.000794,3,1,0.500000000000,0,0,0,0,0,0.000000,0,0,0,0,1.0e+12

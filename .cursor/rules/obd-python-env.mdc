@@ -1,0 +1,21 @@
+---
+description: Use conda env "obd" for Python in this project
+alwaysApply: true
+---
+
+# Python environment: `obd`
+
+This repo’s dependencies (numpy, scipy, sympy, etc.) live in the **conda** environment named **`obd`**.
+
+## When you run terminal commands (agent)
+
+Use the `obd` env so imports work—for example:
+
+- `conda run -n obd python <script.py> [args...]`
+- `conda run -n obd python -m pytest ...`
+
+Or run after `conda activate obd` in that shell. Do **not** use bare system `python3` if it may lack packages.
+
+## When you show example commands to the user
+
+Use normal **`python ...`** (no `conda run` prefix). They use the `obd` environment in their own setup; examples should stay short and copy-paste friendly.

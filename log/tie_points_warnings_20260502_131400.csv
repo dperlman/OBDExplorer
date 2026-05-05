@@ -1,0 +1,5 @@
+run_started_at,n,tie_idx,tie_index_signed,tie_p,pairs_i_j,anomaly_flags,eps_floor_hit,ulp_adjust_left,ulp_adjust_right,deadzone_used,deadzone_flat_side,methods_tried,deadzone_resolution,resolution_path,resolution_failure_reason,extremum_type,extremum_ambiguous,dir_change
+2026-05-02 13:14:00,326,24407,-2162,0.47529117296080114,"29,285",eps_floor,1,0,0,0,,,na,non_deadzone_fast,,neither,0,0
+2026-05-02 13:14:00,326,24408,-2161,0.47529117296144424,"127,183",eps_floor,1,0,0,0,,,na,non_deadzone_fast,,neither,0,0
+2026-05-02 13:14:00,326,28730,2161,0.52470882703855581,"143,199",eps_floor,1,0,0,0,,,na,non_deadzone_fast,,neither,0,0
+2026-05-02 13:14:00,326,28731,2162,0.52470882703919897,"41,297",eps_floor,1,0,0,0,,,na,non_deadzone_fast,,neither,0,0
