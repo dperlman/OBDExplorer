@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "obdexplorer"
+version = "0.1.0"
+description = "Tools for exploring the deep structure of the Ordered Binomial Distribution"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "sympy",
+  "mpmath",
+  "matplotlib",
+  "plotly",
+  "scikit-learn",
+  "umap-learn",
+]
+
+[project.optional-dependencies]
+gui = [
+  "PyQt6",
+  "pyqtgraph",
+  "fastplotlib",
+  "pygfx",
+]
+
+[tool.setuptools]
+py-modules = [
+  "OBDExplorerPlus",
+  "OBDsaveSourceData",
+  "OBDGraphExplorerQT",
+  "OBDGraphWithTieFastplotlib",
+  "OBDGraphWithTieMatplotlib",
+  "OBDGraphWithTiePyQTGraph",
+  "OBD2Dprojection",
+  "OBDexplorer1",
+  "OBDexplorer2",
+  "OBDexplorer3",
+  "OBDgraphExplorer1",
+  "OBDinteractiveBinomial",
+  "OBDplotTiePoints",
+  "OBDplotTiePoints2",
+  "OBDPlots3d",
+  "OBDPlots4d",
+  "OBDsimpleGraph",
+  "OBDswapGraph1",
+  "OBDtSNE",
+  "OBDtiePointFormulas",
+  "OBDtiePointsExplorer1",
+  "diagnostic_tie_p_method_agreement",
+  "plot_last_cusp_features",
+  "plot_n_local_min_tie_points",
+  "test_exact_tie_point_agreement",
+  "tie_diagnose_all_last_cusps",
+  "tie_flat_tol_sensitivity_sweep",
+  "tie_slope_diagnostic",
+]
+
+[tool.setuptools.packages.find]
+include = ["obd_explorer*"]

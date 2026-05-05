@@ -1,0 +1,13 @@
+# Core dependencies (non-GUI)
+numpy
+scipy
+sympy
+mpmath
+matplotlib
+plotly
+scikit-learn
+umap-learn
+
+# GUI dependencies are intentionally optional.
+# Install them with:
+#   pip install ".[gui]"

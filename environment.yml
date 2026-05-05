@@ -1,0 +1,14 @@
+name: obd
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy
+  - scipy
+  - sympy
+  - mpmath
+  - matplotlib
+  - plotly
+  - scikit-learn
+  - umap-learn
+  - pip
