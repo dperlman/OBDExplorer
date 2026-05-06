@@ -41,6 +41,7 @@ def write_explorer1_html(
     graph_manifest: str | None = None,
     graph_shards_dir: str | None = None,
     tie_manifest: str | None = None,
+    colorscale: str = "viridis",
     verbose: bool = True,
     progress: bool = False,
 ) -> None:
@@ -74,6 +75,7 @@ def write_explorer1_html(
         n_max=n_max,
         p_steps=p_steps,
         p_values=[float(x) for x in grid.p_values],
+        colorscale=colorscale,
     )
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)

@@ -14,6 +14,54 @@ import webbrowser
 from obd_explorer.constants import DEFAULT_GRAPH_P_STEPS
 from obd_explorer.model import TIE_COLOR_AXIS_CHOICES
 
+# HTML colorscale choices: match GUI colormap names (see qt_graphics.CMAP_NAMES).
+HTML_COLOR_SCALE_CHOICES: tuple[str, ...] = (
+    "gist_rainbow",
+    "turbo",
+    "viridis",
+    "plasma",
+    "inferno",
+    "magma",
+    "cividis",
+    "hsv",
+    "jet",
+    "nipy_spectral",
+    "twilight",
+    "coolwarm",
+    "winter",
+    "spring",
+    "summer",
+    "autumn",
+    "wistia",
+    "PiYG",
+    "PRGn",
+    "BrBG",
+    "PuOr",
+    "RdGy",
+    "RdBu",
+    "RdYlBu",
+    "RdYlGn",
+    "Spectral",
+    "bwr",
+    "seismic",
+    "berlin",
+    "managua",
+    "vanimo",
+    "flag",
+    "prism",
+    "ocean",
+    "gist_earth",
+    "terrain",
+    "gist_stern",
+    "gnuplot",
+    "gnuplot2",
+    "CMRmap",
+    "cubehelix",
+    "brg",
+    "rainbow",
+    "gist_ncar",
+)
+
 
 def _effective_default_graph_shards_dir() -> str:
     return os.path.join("data", "graph_data_shards")
@@ -149,6 +197,9 @@ def _parse_tie_direction(text: str) -> str:
 def _parse_tie_color_axis(text: str) -> str:
     return _parse_choice(text, TIE_COLOR_AXIS_CHOICES, field="tie_color_axis").lower()
 
+def _parse_html_colorscale(text: str) -> str:
+    return _parse_choice(text, HTML_COLOR_SCALE_CHOICES, field="colorscale")
+
 
 def _parse_fill_from(text: str) -> str:
     return _parse_choice(text, ("left", "right"), field="fill_from")
@@ -223,6 +274,7 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
         "n_min": 2,
         "n_max": default_n_max,
         "tie_manifest": None,
+        "colorscale": "viridis",
         "verbose": False,
         "open_browser": False,
     }
@@ -270,6 +322,20 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
     fields.extend(
         [
             ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to tie shard manifest."),
+        ]
+    )
+    if variant in (1, 5, 6):
+        fields.append(
+            (
+                "colorscale",
+                "colorscale",
+                _parse_html_colorscale,
+                "Line colorscale for Multiple mode. Options: "
+                + ", ".join(HTML_COLOR_SCALE_CHOICES),
+            )
+        )
+    fields.extend(
+        [
             (
                 "verbose",
                 'verbose ("yes"|"no")',
@@ -738,6 +804,7 @@ def _run_html(args: argparse.Namespace) -> None:
             graph_manifest=args.graph_manifest,
             graph_shards_dir=args.graph_shards_dir,
             tie_manifest=args.tie_manifest,
+            colorscale=getattr(args, "colorscale", "viridis"),
             verbose=True,
             progress=progress,
         )
@@ -791,6 +858,7 @@ def _run_html(args: argparse.Namespace) -> None:
             n_min=args.n_min,
             n_max=args.n_max,
             tie_manifest=args.tie_manifest,
+            colorscale=getattr(args, "colorscale", "viridis"),
             verbose=True,
             progress=progress,
         )
@@ -802,6 +870,7 @@ def _run_html(args: argparse.Namespace) -> None:
             n_min=args.n_min,
             n_max=args.n_max,
             tie_manifest=args.tie_manifest,
+            colorscale=getattr(args, "colorscale", "viridis"),
             verbose=True,
             progress=progress,
         )
@@ -884,6 +953,13 @@ def main() -> None:
         "--verbose",
         action="store_true",
         help="Print timing and progress to stderr every 10 n values while building embedded HTML data.",
+    )
+    p_html.add_argument(
+        "--colorscale",
+        default="viridis",
+        choices=HTML_COLOR_SCALE_CHOICES,
+        help="Line colorscale for Multiple mode (variants 1, 5, 6). "
+        "Available options: " + ", ".join(HTML_COLOR_SCALE_CHOICES),
     )
 
     p_exp = sub.add_parser("export", help="Headless graph export (PyQtGraph or Matplotlib backend).")

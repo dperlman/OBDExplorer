@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from matplotlib import colormaps
+from matplotlib.colors import to_hex
 
 
 def build_explorer1_html(
@@ -13,10 +15,12 @@ def build_explorer1_html(
     n_max: int,
     p_steps: int,
     p_values: list[float],
+    colorscale: str = "viridis",
 ) -> str:
     p_half_start = (p_steps - 1) // 2
     p_labels_json = json.dumps([round(p, 4) for p in p_values])
     tie_points_json = json.dumps(tie_points_by_n)
+    color_lut_json = json.dumps([to_hex(colormaps[colorscale](i / 255.0), keep_alpha=False) for i in range(256)])
     p_idx_max = p_steps - 1
     p_default_hi = min(p_half_start + 50, p_idx_max)
     return f"""<!DOCTYPE html>
@@ -266,6 +270,7 @@ def build_explorer1_html(
     const BINOMIAL_DATA = {json.dumps(binomial_data)};
     const P_LABELS = {p_labels_json};
     const TIE_POINTS_BY_N = {tie_points_json};
+    const COLOR_LUT = {color_lut_json};
 
     function getBinomialIndex(n, pIdx) {{ return (n - {n_min}) * {p_steps} + pIdx; }}
     const P_HALF_START = {p_half_start};
@@ -520,12 +525,18 @@ def build_explorer1_html(
       return {{ x: xArr, y: yArr }};
     }}
 
+    function colorFromLut(t) {{
+      var u = Math.max(0, Math.min(1, t));
+      var idx = Math.round(u * (COLOR_LUT.length - 1));
+      return COLOR_LUT[idx];
+    }}
+
     function colorForN(n, nLo, nHi) {{
       var lo = nLo !== undefined ? nLo : {n_min};
       var hi = nHi !== undefined ? nHi : {n_max};
       var span = hi - lo;
       var t = span > 0 ? (n - lo) / span : 0;
-      return "hsl(" + Math.round(240 * (1 - t)) + ", 70%, 45%)";
+      return colorFromLut(t);
     }}
 
     function colorForPIdx(pIdx, pLo, pHi) {{
@@ -533,7 +544,7 @@ def build_explorer1_html(
       var hi = pHi !== undefined ? pHi : P_IDX_MAX;
       var span = hi - lo;
       var t = span > 0 ? (pIdx - lo) / span : 0;
-      return "hsl(" + Math.round(240 * (1 - t)) + ", 70%, 45%)";
+      return colorFromLut(t);
     }}
 
     function getMultipleStride() {{

@@ -17,6 +17,7 @@ def write_explorer6_html(
     n_min: int,
     n_max: int,
     tie_manifest: str | None = None,
+    colorscale: str = "viridis",
     verbose: bool = True,
     progress: bool = False,
 ) -> None:
@@ -34,7 +35,7 @@ def write_explorer6_html(
                 file=sys.stderr,
             )
     tie_data = tie_explorer5_series_by_n(tie_payload, n_min, n_max, progress=progress)
-    html = build_explorer6_html(tie_data, n_min=n_min, n_max=n_max)
+    html = build_explorer6_html(tie_data, n_min=n_min, n_max=n_max, colorscale=colorscale)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     if verbose:

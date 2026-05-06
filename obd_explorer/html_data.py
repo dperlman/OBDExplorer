@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from OBDsaveSourceData import _is_canonical_center_tie
+
 from obd_explorer.grid import BinomialGrid
 
 
@@ -161,9 +163,13 @@ def json_dumps_p_labels(p_values: tuple[float, ...]) -> str:
     return json.dumps([round(float(p), 4) for p in p_values])
 
 
-# Variant 5 embedded tie arrays: non-negative signed index from center (p closest to 0.5), max index 1000.
-EXPLORER5_MAX_TIE_INDEX = 1000
-EXPLORER5_EMBEDDED_ROW_COUNT = EXPLORER5_MAX_TIE_INDEX + 1
+# Variant 5/6 embedded tie rows: union of (a) up to 1000 ties from center outward along valid_rows,
+# and (b) up to 1000 ties from the last tie backward; duplicates removed; sorted by valid_rows index.
+# At most 2000 rows ⇒ embedded indices 0..1999.
+EXPLORER5_CENTER_ARM_LENGTH = 1000
+EXPLORER5_TAIL_ARM_LENGTH = 1000
+EXPLORER5_EMBEDDED_ROW_COUNT = EXPLORER5_CENTER_ARM_LENGTH + EXPLORER5_TAIL_ARM_LENGTH
+EXPLORER5_MAX_TIE_INDEX = EXPLORER5_EMBEDDED_ROW_COUNT - 1
 
 
 def tie_explorer5_series_by_n(
@@ -173,17 +179,27 @@ def tie_explorer5_series_by_n(
     *,
     progress: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    """Per-n tie arrays for HTML explorer variant 5 (x = n, y = tie scalar at tie point index).
+    """Per-n tie arrays for HTML explorer variants 5 and 6.
 
-    Rows are **only** ties with non-negative signed index from the center tie (``p`` closest to
-    0.5 among valid records), capped at ``EXPLORER5_EMBEDDED_ROW_COUNT`` rows (indices ``0..EXPLORER5_MAX_TIE_INDEX``).
-    Row ``t`` is signed tie index ``t`` from center. Slopes ``l`` / ``r`` and ``expected_sorted``
-    come from ``tie_slope_by_n``; ``d`` = ``r - l``, ``e`` = ``l - r`` when both slopes exist;
-    ``ev_n`` = ``expected_sorted / n`` when present.
+    Native tie index for variants 5/6 is defined on the **non-negative side only**:
+    index ``0`` is the canonical center tie point, and index ``t`` maps to record
+    ``rec_idx = center_idx + t``.
+
+    Let ``m_nonneg = len(recs) - center_idx`` (ties from center through last tie).
+    Select native indices by union of:
+
+    - **Forward arm:** ``0 .. EXPLORER5_CENTER_ARM_LENGTH-1`` (clipped by ``m_nonneg``)
+    - **Backward arm:** the last ``EXPLORER5_TAIL_ARM_LENGTH`` indices in ``0..m_nonneg-1``
+
+    Union is sorted ascending by native index. Embedded row ``0`` is native index ``0``
+    (center tie), and embedded last row is native index ``m_nonneg-1`` (last tie).
+
+    Slopes align with ``tie_slope_by_n[rec_idx]`` (record order in the shard).
+
+    If no canonical center tie row is found, this is treated as invalid data and raises ``ValueError``.
     """
     float_with_pairs_by_n = tie_payload.get("float_with_pairs_by_n") or {}
     slope_by_n = tie_payload.get("tie_slope_by_n") or {}
-    cap = EXPLORER5_EMBEDDED_ROW_COUNT
     out: dict[str, dict[str, Any]] = {}
     t0 = time.perf_counter()
     if progress:
@@ -203,20 +219,44 @@ def tie_explorer5_series_by_n(
                 slope_recs = slope_by_n.get(str(n))
             slope_list: list[dict[str, Any]] = list(slope_recs) if isinstance(slope_recs, list) else []
 
-            valid_rows: list[tuple[int, float]] = []
+            m = len(recs)
+            if m == 0:
+                continue
+
+            center_idx: int | None = None
+            tie_ps: list[float] = [float("nan")] * m
             for rec_idx, item in enumerate(recs):
                 if not isinstance(item, (list, tuple)) or len(item) != 2:
                     continue
-                p_raw = item[0]
-                valid_rows.append((rec_idx, float(p_raw)))
+                p_raw = float(item[0])
+                tie_ps[rec_idx] = p_raw
+                pairs = item[1]
+                plist = list(pairs) if pairs else []
+                if _is_canonical_center_tie(int(n), plist):
+                    center_idx = rec_idx
+                    break
 
-            if not valid_rows:
-                continue
+            if center_idx is None:
+                raise ValueError(f"n={n}: missing canonical center tie point in float_with_pairs_by_n")
 
-            tie_arr = np.asarray([r[1] for r in valid_rows], dtype=float)
-            center_k = int(np.argmin(np.abs(tie_arr - 0.5)))
-            slice_rows = valid_rows[center_k : center_k + cap]
-            if not slice_rows:
+            m_nonneg = m - center_idx
+            if m_nonneg <= 0:
+                raise ValueError(f"n={n}: invalid center index {center_idx} for {m} tie rows")
+            forward_native: set[int] = set()
+            for t in range(EXPLORER5_CENTER_ARM_LENGTH):
+                ri = center_idx + t
+                if 0 <= t < m_nonneg and 0 <= ri < m:
+                    forward_native.add(t)
+
+            backward_native: set[int] = set()
+            tail_start = max(0, m_nonneg - EXPLORER5_TAIL_ARM_LENGTH)
+            for t in range(tail_start, m_nonneg):
+                ri = center_idx + t
+                if 0 <= ri < m:
+                    backward_native.add(t)
+
+            selected_native = sorted(forward_native | backward_native)
+            if not selected_native:
                 continue
 
             ps: list[float] = []
@@ -225,8 +265,13 @@ def tie_explorer5_series_by_n(
             lv: list[float | None] = []
             rv: list[float | None] = []
             ev_ns: list[float | None] = []
-            for rec_idx, _ in slice_rows:
+            for t in selected_native:
+                rec_idx = center_idx + t
+                if not (0 <= rec_idx < m):
+                    continue
                 item = recs[rec_idx]
+                if not isinstance(item, (list, tuple)) or len(item) != 2:
+                    continue
                 _, pairs = item[0], item[1]
                 pf = float(item[0])
                 pi, pj = None, None

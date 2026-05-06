@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from matplotlib import colormaps
+from matplotlib.colors import to_hex
 
 from obd_explorer.html_data import EXPLORER5_MAX_TIE_INDEX
 
@@ -12,10 +14,13 @@ def build_explorer5_html(
     *,
     n_min: int,
     n_max: int,
+    colorscale: str = "viridis",
 ) -> str:
     tie_json = json.dumps(tie_data, allow_nan=False)
-    n_default_hi = min(10, n_max)
+    color_lut_json = json.dumps([to_hex(colormaps[colorscale](i / 255.0), keep_alpha=False) for i in range(256)])
+    n_default_hi = n_max
     tm = EXPLORER5_MAX_TIE_INDEX
+    ui_max = min(999, tm)
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -212,7 +217,7 @@ def build_explorer5_html(
         <option value="d">d (r − l)</option>
         <option value="e">e (l − r)</option>
         <option value="p">p (tie)</option>
-        <option value="ev_n">ev/n (expected_sorted / n)</option>
+        <option value="ev_n">ev/n</option>
       </select>
       <label><input type="checkbox" id="freeze-y"> Freeze y</label>
       <label><input type="checkbox" id="end-ties"> End ties</label>
@@ -227,13 +232,13 @@ def build_explorer5_html(
               <span class="obd-dual-thumb obd-dual-thumb-left" aria-hidden="true"></span>
               <span class="obd-dual-thumb obd-dual-thumb-right" aria-hidden="true"></span>
             </div>
-            <input type="range" id="tie-range-low" min="0" max="{tm}" step="1" value="0" aria-label="Minimum tie point index">
-            <input type="range" id="tie-range-high" min="0" max="{tm}" step="1" value="0" aria-label="Maximum tie point index">
+            <input type="range" id="tie-range-low" min="0" max="{ui_max}" step="1" value="0" aria-label="Minimum tie point index">
+            <input type="range" id="tie-range-high" min="0" max="{ui_max}" step="1" value="0" aria-label="Maximum tie point index">
           </div>
           <label for="tie-range-low" class="obd-tie-range-label"><b>Tie #</b></label>
-          <input type="number" id="tie-num-low" class="range-num" min="0" max="{tm}" step="1" value="0" aria-label="Tie minimum index">
+          <input type="number" id="tie-num-low" class="range-num" min="0" max="{ui_max}" step="1" value="0" aria-label="Tie minimum index">
           <span class="range-to">to</span>
-          <input type="number" id="tie-num-high" class="range-num" min="0" max="{tm}" step="1" value="0" aria-label="Tie maximum index" disabled>
+          <input type="number" id="tie-num-high" class="range-num" min="0" max="{ui_max}" step="1" value="0" aria-label="Tie maximum index" disabled>
         </div>
       </div>
       <div id="ctrl-n" class="ctrl-panel">
@@ -257,12 +262,21 @@ def build_explorer5_html(
       </div>
       <label><input type="checkbox" id="log-x"> Log x</label>
       <label><input type="checkbox" id="log-y"> Log y</label>
+      <label><input type="checkbox" id="show-points" checked> Points</label>
     </div>
   </div>
 
   <script>
     const TIE_DATA = {tie_json};
     const TIE_IDX_MAX = {tm};
+    const USER_TIE_MAX = {ui_max};
+    const COLOR_LUT = {color_lut_json};
+    function colorFromLut(t) {{
+      var u = Math.max(0, Math.min(1, t));
+      var idx = Math.round(u * (COLOR_LUT.length - 1));
+      return COLOR_LUT[idx];
+    }}
+
     var tieRangeLo = 0, tieRangeHi = 0;
     var nRangeLo = {n_min}, nRangeHi = {n_default_hi};
     var frozenYRange = null;
@@ -298,17 +312,18 @@ def build_explorer5_html(
         if (uiIdx < 0 || uiIdx >= len) return -1;
         return uiIdx;
       }}
-      if (uiIdx < 0) return -1;
-      var phys = len - 1 - uiIdx;
+      if (uiIdx < 0 || uiIdx > USER_TIE_MAX) return -1;
+      var offsetFromEnd = uiIdx;
+      var phys = len - 1 - offsetFromEnd;
       return phys >= 0 ? phys : -1;
     }}
 
     function tieShownFromUi(uiIdx, endTies) {{
-      return endTies ? (TIE_IDX_MAX - uiIdx + 1) : uiIdx;
+      return endTies ? (uiIdx + 1) : uiIdx;
     }}
 
     function tieUiFromShown(shownIdx, endTies) {{
-      return endTies ? (TIE_IDX_MAX - shownIdx + 1) : shownIdx;
+      return endTies ? (shownIdx - 1) : shownIdx;
     }}
 
     function clampInt(v, lo, hi, fallback) {{
@@ -325,7 +340,7 @@ def build_explorer5_html(
       if (!lo || !hi) return;
       var endLast = endTiesMode();
       var shownMin = endLast ? 1 : 0;
-      var shownMax = endLast ? (TIE_IDX_MAX + 1) : TIE_IDX_MAX;
+      var shownMax = endLast ? (USER_TIE_MAX + 1) : USER_TIE_MAX;
       var a = Math.min(tieRangeLo, tieRangeHi);
       var b = Math.max(tieRangeLo, tieRangeHi);
       var sa = tieShownFromUi(a, endLast);
@@ -350,8 +365,8 @@ def build_explorer5_html(
     }}
 
     function obdTieDualRangePct(v) {{
-      if (TIE_IDX_MAX <= 0) return 0;
-      return (v / TIE_IDX_MAX) * 100;
+      if (USER_TIE_MAX <= 0) return 0;
+      return (v / USER_TIE_MAX) * 100;
     }}
 
     function applyObdTieDualRangeVisual() {{
@@ -383,6 +398,8 @@ def build_explorer5_html(
       var loIn = document.getElementById("tie-range-low");
       var hiIn = document.getElementById("tie-range-high");
       if (!loIn || !hiIn) return;
+      tieRangeLo = clampInt(tieRangeLo, 0, USER_TIE_MAX, 0);
+      tieRangeHi = clampInt(tieRangeHi, 0, USER_TIE_MAX, tieRangeLo);
       if (tieMultiple()) {{
         var a = Math.min(tieRangeLo, tieRangeHi), b = Math.max(tieRangeLo, tieRangeHi);
         loIn.value = String(a);
@@ -402,8 +419,8 @@ def build_explorer5_html(
       var loIn = document.getElementById("tie-range-low");
       var hiIn = document.getElementById("tie-range-high");
       if (!loIn || !hiIn) return;
-      var lo = parseInt(loIn.value, 10);
-      var hi = parseInt(hiIn.value, 10);
+      var lo = clampInt(loIn.value, 0, USER_TIE_MAX, tieRangeLo);
+      var hi = clampInt(hiIn.value, 0, USER_TIE_MAX, tieRangeHi);
       if (!tieMultiple()) {{
         hi = lo;
         hiIn.value = String(hi);
@@ -423,8 +440,8 @@ def build_explorer5_html(
       var loIn = document.getElementById("tie-range-low");
       var hiIn = document.getElementById("tie-range-high");
       if (!loIn || !hiIn) return;
-      var lo = parseInt(loIn.value, 10);
-      var hi = parseInt(hiIn.value, 10);
+      var lo = clampInt(loIn.value, 0, USER_TIE_MAX, tieRangeLo);
+      var hi = clampInt(hiIn.value, 0, USER_TIE_MAX, tieRangeHi);
       if (hi < lo) {{ hi = lo; hiIn.value = String(hi); }}
       tieRangeLo = lo;
       tieRangeHi = hi;
@@ -436,7 +453,7 @@ def build_explorer5_html(
     function onTieNumLowInput() {{
       var endLast = endTiesMode();
       var shownMin = endLast ? 1 : 0;
-      var shownMax = endLast ? (TIE_IDX_MAX + 1) : TIE_IDX_MAX;
+      var shownMax = endLast ? (USER_TIE_MAX + 1) : USER_TIE_MAX;
       var shownFallback = tieShownFromUi(tieRangeLo, endLast);
       var shownLo = clampInt(document.getElementById("tie-num-low").value, shownMin, shownMax, shownFallback);
       var shownHi = tieShownFromUi(tieRangeHi, endLast);
@@ -457,7 +474,7 @@ def build_explorer5_html(
       if (!tieMultiple()) return;
       var endLast = endTiesMode();
       var shownMin = endLast ? 1 : 0;
-      var shownMax = endLast ? (TIE_IDX_MAX + 1) : TIE_IDX_MAX;
+      var shownMax = endLast ? (USER_TIE_MAX + 1) : USER_TIE_MAX;
       var shownLo = tieShownFromUi(tieRangeLo, endLast);
       var shownHiFallback = tieShownFromUi(tieRangeHi, endLast);
       var shownHi = clampInt(document.getElementById("tie-num-high").value, shownMin, shownMax, shownHiFallback);
@@ -569,10 +586,10 @@ def build_explorer5_html(
 
     function colorForTieIdx(tIdx, tLo, tHi) {{
       var lo = tLo !== undefined ? tLo : 0;
-      var hi = tHi !== undefined ? tHi : TIE_IDX_MAX;
+      var hi = tHi !== undefined ? tHi : USER_TIE_MAX;
       var span = hi - lo;
       var tt = span > 0 ? (tIdx - lo) / span : 0;
-      return "hsl(" + Math.round(240 * (1 - tt)) + ", 70%, 45%)";
+      return colorFromLut(tt);
     }}
 
     function yAtTieIndex(s, field, uiIdx, endTies) {{
@@ -593,6 +610,7 @@ def build_explorer5_html(
     function buildTracesAndTitle() {{
       var field = document.getElementById("field").value;
       var endLast = endTiesMode();
+      var traceMode = document.getElementById("show-points").checked ? "lines+markers" : "lines";
       var nLo = Math.min(nRangeLo, nRangeHi), nHi = Math.max(nRangeLo, nRangeHi);
       var tLo = Math.min(tieRangeLo, tieRangeHi), tHi = Math.max(tieRangeLo, tieRangeHi);
       var tsLo = Math.min(tieShownFromUi(tLo, endLast), tieShownFromUi(tHi, endLast));
@@ -618,7 +636,7 @@ def build_explorer5_html(
         traces.push({{
           x: xs,
           y: ys,
-          mode: "lines+markers",
+          mode: traceMode,
           type: "scatter",
           name: field + " @tie=" + ts,
           text: text,
@@ -645,12 +663,12 @@ def build_explorer5_html(
           traces.push({{
             x: xsM,
             y: ysM,
-            mode: "lines+markers",
+            mode: traceMode,
             type: "scatter",
             name: "tie=" + tShown,
             text: textM,
             hovertemplate: "n=%{{x}}<br>" + field + "=%{{y}}<br>%{{text}}<extra></extra>",
-            showlegend: true,
+            showlegend: false,
             line: {{ color: colorForTieIdx(ti, tLo, tHi), width: 1.5 }}
           }});
         }}
@@ -717,6 +735,7 @@ def build_explorer5_html(
     }});
     document.getElementById("log-x").addEventListener("change", updateGraph);
     document.getElementById("log-y").addEventListener("change", updateGraph);
+    document.getElementById("show-points").addEventListener("change", updateGraph);
     document.getElementById("end-ties").addEventListener("change", function() {{
       syncTieNumberInputs();
       updateGraph();
