@@ -267,13 +267,14 @@ def _interactive_html_pick_variant() -> int | None:
 
 
 def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | None:
-    default_n_max = 200 if variant in (1, 5, 6) else 100
+    default_n_max = 200 if variant in (5, 6) else 100
     cfg: dict[str, object] = {
         "variant": variant,
         "output": _default_html_output_for_variant(variant),
         "n_min": 2,
         "n_max": default_n_max,
         "tie_manifest": None,
+        "include_tie_points": True,
         "colorscale": "viridis",
         "verbose": False,
         "open_browser": False,
@@ -334,6 +335,15 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
                 + ", ".join(HTML_COLOR_SCALE_CHOICES),
             )
         )
+    if variant == 1:
+        fields.append(
+            (
+                "include_tie_points",
+                'include tie points ("yes"|"no")',
+                _parse_bool,
+                "If no, do not load tie shards at build time and keep Swap points disabled in the HTML.",
+            )
+        )
     fields.extend(
         [
             (
@@ -346,9 +356,13 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
         ]
     )
 
+    key_by_field = {"n_min": "n", "n_max": "m", "verbose": "v"}
+    if variant == 1:
+        key_by_field["p_steps"] = "p"
+        key_by_field["colorscale"] = "c"
     keymap = _build_menu_keymap(
         fields,
-        key_by_field={"n_min": "n", "n_max": "m", "verbose": "v"},
+        key_by_field=key_by_field,
     )
     if not keymap:
         return None
@@ -804,6 +818,7 @@ def _run_html(args: argparse.Namespace) -> None:
             graph_manifest=args.graph_manifest,
             graph_shards_dir=args.graph_shards_dir,
             tie_manifest=args.tie_manifest,
+            include_tie_points=bool(getattr(args, "include_tie_points", True)),
             colorscale=getattr(args, "colorscale", "viridis"),
             verbose=True,
             progress=progress,
@@ -960,6 +975,19 @@ def main() -> None:
         choices=HTML_COLOR_SCALE_CHOICES,
         help="Line colorscale for Multiple mode (variants 1, 5, 6). "
         "Available options: " + ", ".join(HTML_COLOR_SCALE_CHOICES),
+    )
+    p_html.add_argument(
+        "--include-tie-points",
+        action="store_true",
+        dest="include_tie_points",
+        default=True,
+        help="(Variant 1) include tie points in embedded HTML and enable Swap points when allowed.",
+    )
+    p_html.add_argument(
+        "--no-tie-points",
+        action="store_false",
+        dest="include_tie_points",
+        help="(Variant 1) skip loading tie points at build time and keep Swap points disabled.",
     )
 
     p_exp = sub.add_parser("export", help="Headless graph export (PyQtGraph or Matplotlib backend).")

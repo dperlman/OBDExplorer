@@ -41,6 +41,7 @@ def write_explorer1_html(
     graph_manifest: str | None = None,
     graph_shards_dir: str | None = None,
     tie_manifest: str | None = None,
+    include_tie_points: bool = True,
     colorscale: str = "viridis",
     verbose: bool = True,
     progress: bool = False,
@@ -54,20 +55,23 @@ def write_explorer1_html(
     )
     binomial_data = materialize_binomial_series_for_js(grid, progress=progress)
     n_vals = list(range(n_min, n_max + 1))
-    tie_payload = _load_tie_payload(
-        tie_manifest,
-        n_vals,
-        progress=(10 if progress else None),
-    )
-    if not tie_payload.get("float_with_pairs_by_n") and not tie_payload.get("float_by_n"):
-        if verbose:
-            man = tie_manifest or DEFAULT_TIE_OUTPUT
-            print(
-                f"WARNING: No tie shard manifest at {man!r}; "
-                "swap-point hairlines may be empty.\n",
-                file=sys.stderr,
-            )
-    tie_points_by_n = tie_points_by_n_for_explorer1(tie_payload, n_min, n_max, progress=progress)
+    if include_tie_points:
+        tie_payload = _load_tie_payload(
+            tie_manifest,
+            n_vals,
+            progress=(10 if progress else None),
+        )
+        if not tie_payload.get("float_with_pairs_by_n") and not tie_payload.get("float_by_n"):
+            if verbose:
+                man = tie_manifest or DEFAULT_TIE_OUTPUT
+                print(
+                    f"WARNING: No tie shard manifest at {man!r}; "
+                    "swap-point hairlines may be empty.\n",
+                    file=sys.stderr,
+                )
+        tie_points_by_n = tie_points_by_n_for_explorer1(tie_payload, n_min, n_max, progress=progress)
+    else:
+        tie_points_by_n = {}
     html = build_explorer1_html(
         binomial_data,
         tie_points_by_n,
@@ -75,6 +79,7 @@ def write_explorer1_html(
         n_max=n_max,
         p_steps=p_steps,
         p_values=[float(x) for x in grid.p_values],
+        include_tie_points=include_tie_points,
         colorscale=colorscale,
     )
     with open(output_path, "w", encoding="utf-8") as f:

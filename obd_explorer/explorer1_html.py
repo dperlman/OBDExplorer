@@ -15,6 +15,7 @@ def build_explorer1_html(
     n_max: int,
     p_steps: int,
     p_values: list[float],
+    include_tie_points: bool = True,
     colorscale: str = "viridis",
 ) -> str:
     p_half_start = (p_steps - 1) // 2
@@ -219,7 +220,6 @@ def build_explorer1_html(
         <option value="vp">E vs P</option>
         <option value="vn">E vs N</option>
       </select>
-      <label><input type="checkbox" id="sorted"> Sorted</label>
       <label for="scale-mode">Y scale</label>
       <select id="scale-mode" aria-label="Y axis scaling">
         <option value="unscaled">Unscaled</option>
@@ -270,6 +270,7 @@ def build_explorer1_html(
     const BINOMIAL_DATA = {json.dumps(binomial_data)};
     const P_LABELS = {p_labels_json};
     const TIE_POINTS_BY_N = {tie_points_json};
+    const INCLUDE_TIE_POINTS = {"true" if include_tie_points else "false"};
     const COLOR_LUT = {color_lut_json};
 
     function getBinomialIndex(n, pIdx) {{ return (n - {n_min}) * {p_steps} + pIdx; }}
@@ -571,7 +572,7 @@ def build_explorer1_html(
 
     function updateGraph() {{
       const mode = document.getElementById("mode").value;
-      const sorted = document.getElementById("sorted").checked;
+      const sorted = true;
       const scaleMode = document.getElementById("scale-mode").value;
       const logXAxis = document.getElementById("log-x").checked;
       const logYAxis = document.getElementById("log-y").checked;
@@ -759,7 +760,7 @@ def build_explorer1_html(
     function syncSwapPointsControl() {{
       var mode = document.getElementById("mode").value;
       var mult = document.getElementById("multiple").checked;
-      var allowed = mode === "vp" && !mult;
+      var allowed = INCLUDE_TIE_POINTS && mode === "vp" && !mult;
       var swapEl = document.getElementById("swap-points");
       var swapLab = document.getElementById("swap-points-label");
       if (!swapEl || !swapLab) return;
@@ -840,7 +841,6 @@ def build_explorer1_html(
     }});
     document.getElementById("p-range-low").addEventListener("input", onObdPDualRangeLowInput);
     document.getElementById("p-range-high").addEventListener("input", onObdPDualRangeHighInput);
-    document.getElementById("sorted").addEventListener("change", updateGraph);
     document.getElementById("scale-mode").addEventListener("change", updateGraph);
     document.getElementById("log-x").addEventListener("change", updateGraph);
     document.getElementById("log-y").addEventListener("change", updateGraph);
