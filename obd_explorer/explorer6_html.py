@@ -2,11 +2,34 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from matplotlib import colormaps
 from matplotlib.colors import to_hex
+import numpy as np
 
 from obd_explorer.html_data import EXPLORER5_MAX_TIE_INDEX
+
+
+_TIE_PACK_FIELDS = ("p", "i", "j", "l", "r", "d", "e", "ev_n")
+
+
+def _pack_float32_base64(values: object) -> str:
+    if not isinstance(values, (list, tuple)) or not values:
+        return ""
+    arr = np.empty(len(values), dtype=np.float32)
+    for idx, raw in enumerate(values):
+        arr[idx] = np.float32(np.nan if raw is None else raw)
+    return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _pack_tie_payload_float32_base64(tie_data: dict[str, object]) -> dict[str, dict[str, str]]:
+    packed: dict[str, dict[str, str]] = {}
+    for n_key, payload in tie_data.items():
+        if not isinstance(payload, dict):
+            continue
+        packed[str(n_key)] = {field: _pack_float32_base64(payload.get(field)) for field in _TIE_PACK_FIELDS}
+    return packed
 
 
 def build_explorer6_html(
@@ -16,7 +39,7 @@ def build_explorer6_html(
     n_max: int,
     colorscale: str = "viridis",
 ) -> str:
-    tie_json = json.dumps(tie_data, allow_nan=False)
+    tie_packed_json = json.dumps(_pack_tie_payload_float32_base64(tie_data), separators=(",", ":"))
     color_lut_json = json.dumps([to_hex(colormaps[colorscale](i / 255.0), keep_alpha=False) for i in range(256)])
     tm = EXPLORER5_MAX_TIE_INDEX
     ui_max = min(999, tm)
@@ -267,10 +290,36 @@ def build_explorer6_html(
   </div>
 
   <script>
-    const TIE_DATA = {tie_json};
+    const TIE_DATA_PACKED = {tie_packed_json};
     const TIE_IDX_MAX = {tm};
     const USER_TIE_MAX = {ui_max};
     const COLOR_LUT = {color_lut_json};
+    const TIE_FIELDS = ["p", "i", "j", "l", "r", "d", "e", "ev_n"];
+
+    function decodeBase64Float32(b64) {{
+      if (!b64) return new Float32Array(0);
+      var raw = atob(b64);
+      var bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      return new Float32Array(bytes.buffer);
+    }}
+
+    function decodePackedTieData(src) {{
+      var out = {{}};
+      for (var nKey in src) {{
+        if (!Object.prototype.hasOwnProperty.call(src, nKey)) continue;
+        var row = src[nKey] || {{}};
+        var decoded = {{}};
+        for (var i = 0; i < TIE_FIELDS.length; i++) {{
+          var field = TIE_FIELDS[i];
+          decoded[field] = decodeBase64Float32(row[field] || "");
+        }}
+        out[nKey] = decoded;
+      }}
+      return out;
+    }}
+
+    const TIE_DATA = decodePackedTieData(TIE_DATA_PACKED);
     function colorFromLut(t) {{
       var u = Math.max(0, Math.min(1, t));
       var idx = Math.round(u * (COLOR_LUT.length - 1));
@@ -599,10 +648,10 @@ def build_explorer6_html(
       var len = arr ? arr.length : 0;
       if (tIdx >= len) return {{ y: NaN, pStr: "" }};
       var v = arr[tIdx];
-      var y = (v === null || v === undefined) ? NaN : v;
-      var pp = s.p && s.p[tIdx] !== undefined ? s.p[tIdx] : null;
+      var y = Number.isFinite(v) ? v : NaN;
+      var pp = (s.p && s.p.length > tIdx) ? s.p[tIdx] : NaN;
       var pStr = "";
-      if (field !== "p" && pp !== null && isFinite(pp))
+      if (field !== "p" && Number.isFinite(pp))
         pStr = "p=" + pp.toFixed(4);
       return {{ y: y, pStr: pStr }};
     }}
