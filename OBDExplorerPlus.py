@@ -267,7 +267,7 @@ def _interactive_html_pick_variant() -> int | None:
 
 
 def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | None:
-    default_n_max = 200 if variant in (5, 6) else 100
+    default_n_max = 200 if variant in (1, 5, 6) else 100
     cfg: dict[str, object] = {
         "variant": variant,
         "output": _default_html_output_for_variant(variant),
@@ -964,6 +964,7 @@ def main() -> None:
         help="Open the HTML file in the default browser after writing.",
     )
     _add_data_args(p_html)
+    p_html.set_defaults(n_max=200)
     p_html.add_argument(
         "--verbose",
         action="store_true",

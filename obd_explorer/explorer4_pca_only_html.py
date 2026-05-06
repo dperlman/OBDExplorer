@@ -2,7 +2,34 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import numpy as np
+
+
+def _pack_float32_base64(values: object) -> str:
+    if not isinstance(values, (list, tuple)) or not values:
+        return ""
+    arr = np.empty(len(values), dtype=np.float32)
+    for idx, raw in enumerate(values):
+        arr[idx] = np.float32(np.nan if raw is None else raw)
+    return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _pack_projection_rows_base64(rows: list) -> list[dict[str, object]]:
+    packed_rows: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            packed_rows.append({})
+            continue
+        out_row: dict[str, object] = {}
+        for key, val in row.items():
+            if isinstance(val, list):
+                out_row[key] = {"_f32_b64": _pack_float32_base64(val)}
+            else:
+                out_row[key] = val
+        packed_rows.append(out_row)
+    return packed_rows
 
 
 def build_explorer4_pca_only_html_document(
@@ -84,14 +111,45 @@ def build_explorer4_pca_only_html_document(
   </div>
 
   <script>
-    const DATA_FULL_UNSORTED = {json.dumps(data_full_unsorted)};
-    const DATA_FULL_SORTED = {json.dumps(data_full_sorted)};
-    const DATA_HALF_UNSORTED = {json.dumps(data_half_unsorted)};
-    const DATA_HALF_SORTED = {json.dumps(data_half_sorted)};
-    const DATA_TIE_UNSORTED = {json.dumps(data_tie_unsorted)};
-    const DATA_TIE_SORTED = {json.dumps(data_tie_sorted)};
+    const DATA_FULL_UNSORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_full_unsorted), separators=(",", ":"))};
+    const DATA_FULL_SORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_full_sorted), separators=(",", ":"))};
+    const DATA_HALF_UNSORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_half_unsorted), separators=(",", ":"))};
+    const DATA_HALF_SORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_half_sorted), separators=(",", ":"))};
+    const DATA_TIE_UNSORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_tie_unsorted), separators=(",", ":"))};
+    const DATA_TIE_SORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_tie_sorted), separators=(",", ":"))};
     const LAST_TIE_BY_N = {last_tie_json};
     const FIXED_RANGE = {{ x: [-1, 1], y: [-1, 1] }};
+
+    function decodeBase64Float32(b64) {{
+      if (!b64) return new Float32Array(0);
+      var raw = atob(b64);
+      var bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      return new Float32Array(bytes.buffer);
+    }}
+
+    function decodeProjectionRowsPacked(rows) {{
+      var out = [];
+      for (var r = 0; r < rows.length; r++) {{
+        var row = rows[r] || {{}};
+        var dst = {{}};
+        for (var key in row) {{
+          if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+          var val = row[key];
+          if (val && typeof val === "object" && Object.prototype.hasOwnProperty.call(val, "_f32_b64")) dst[key] = decodeBase64Float32(val._f32_b64 || "");
+          else dst[key] = val;
+        }}
+        out.push(dst);
+      }}
+      return out;
+    }}
+
+    const DATA_FULL_UNSORTED = decodeProjectionRowsPacked(DATA_FULL_UNSORTED_PACKED);
+    const DATA_FULL_SORTED = decodeProjectionRowsPacked(DATA_FULL_SORTED_PACKED);
+    const DATA_HALF_UNSORTED = decodeProjectionRowsPacked(DATA_HALF_UNSORTED_PACKED);
+    const DATA_HALF_SORTED = decodeProjectionRowsPacked(DATA_HALF_SORTED_PACKED);
+    const DATA_TIE_UNSORTED = decodeProjectionRowsPacked(DATA_TIE_UNSORTED_PACKED);
+    const DATA_TIE_SORTED = decodeProjectionRowsPacked(DATA_TIE_SORTED_PACKED);
 
     function getDataIndex(n) {{ return n - {n_min}; }}
 
