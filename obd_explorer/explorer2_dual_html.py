@@ -2,7 +2,70 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import numpy as np
+
+
+def _pack_float32_base64(values: object) -> str:
+    if not isinstance(values, (list, tuple)) or not values:
+        return ""
+    arr = np.empty(len(values), dtype=np.float32)
+    for idx, raw in enumerate(values):
+        arr[idx] = np.float32(np.nan if raw is None else raw)
+    return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _pack_uint16_base64(values: object) -> str:
+    if not isinstance(values, (list, tuple)) or not values:
+        return ""
+    arr = np.asarray(values, dtype=np.uint16)
+    return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _pack_binomial_payload_base64_by_n(
+    binomial_data: list,
+    *,
+    n_min: int,
+    n_max: int,
+    p_steps: int,
+) -> dict[str, object]:
+    packed_by_n: dict[str, dict[str, object]] = {}
+    for n in range(n_min, n_max + 1):
+        row_len = n + 1
+        y_flat: list[float] = []
+        perm_flat: list[int] = []
+        base_idx = (n - n_min) * p_steps
+        for p_idx in range(p_steps):
+            pt = binomial_data[base_idx + p_idx]
+            y_vals = pt.get("y") if isinstance(pt, dict) else None
+            perm_vals = pt.get("perm") if isinstance(pt, dict) else None
+            if not isinstance(y_vals, list) or not isinstance(perm_vals, list):
+                raise ValueError(f"Invalid binomial row for n={n}, p_idx={p_idx}")
+            y_flat.extend(float(v) for v in y_vals)
+            perm_flat.extend(int(v) for v in perm_vals)
+        packed_by_n[str(n)] = {
+            "row_len": row_len,
+            "y_f32_b64": _pack_float32_base64(y_flat),
+            "perm_u16_b64": _pack_uint16_base64(perm_flat),
+        }
+    return {"n_min": n_min, "n_max": n_max, "p_steps": p_steps, "by_n": packed_by_n}
+
+
+def _pack_projection_rows_base64(rows: list) -> list[dict[str, object]]:
+    packed_rows: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            packed_rows.append({})
+            continue
+        out_row: dict[str, object] = {}
+        for key, val in row.items():
+            if isinstance(val, list):
+                out_row[key] = {"_f32_b64": _pack_float32_base64(val)}
+            else:
+                out_row[key] = val
+        packed_rows.append(out_row)
+    return packed_rows
 
 
 def build_explorer2_dual_panel_html_document(
@@ -21,6 +84,10 @@ def build_explorer2_dual_panel_html_document(
     p_steps: int,
     p_default_idx: int,
 ) -> str:
+    binomial_packed_json = json.dumps(
+        _pack_binomial_payload_base64_by_n(binomial_data, n_min=n_min, n_max=n_max, p_steps=p_steps),
+        separators=(",", ":"),
+    )
     p_labels_json = json.dumps([round(float(p), 4) for p in p_grid])
     last_tie_json = json.dumps(last_tie_by_n)
     return f"""<!DOCTYPE html>
@@ -111,19 +178,79 @@ def build_explorer2_dual_panel_html_document(
   </div>
 
   <script>
-    const BINOMIAL_DATA = {json.dumps(binomial_data)};
+    const BINOMIAL_PACKED = {binomial_packed_json};
     const P_LABELS = {p_labels_json};
-    const DATA_FULL_UNSORTED = {json.dumps(data_full_unsorted)};
-    const DATA_FULL_SORTED = {json.dumps(data_full_sorted)};
-    const DATA_HALF_UNSORTED = {json.dumps(data_half_unsorted)};
-    const DATA_HALF_SORTED = {json.dumps(data_half_sorted)};
-    const DATA_TIE_UNSORTED = {json.dumps(data_tie_unsorted)};
-    const DATA_TIE_SORTED = {json.dumps(data_tie_sorted)};
+    const DATA_FULL_UNSORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_full_unsorted), separators=(",", ":"))};
+    const DATA_FULL_SORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_full_sorted), separators=(",", ":"))};
+    const DATA_HALF_UNSORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_half_unsorted), separators=(",", ":"))};
+    const DATA_HALF_SORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_half_sorted), separators=(",", ":"))};
+    const DATA_TIE_UNSORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_tie_unsorted), separators=(",", ":"))};
+    const DATA_TIE_SORTED_PACKED = {json.dumps(_pack_projection_rows_base64(data_tie_sorted), separators=(",", ":"))};
     const LAST_TIE_BY_N = {last_tie_json};
     const FIXED_RANGE = {{ x: [-1, 1], y: [-1, 1] }};
+    const BINOMIAL_CACHE_BY_N = {{}};
 
-    function getBinomialIndex(n, pIdx) {{ return (n - {n_min}) * {p_steps} + pIdx; }}
+    function decodeBase64Bytes(b64) {{
+      if (!b64) return new Uint8Array(0);
+      var raw = atob(b64);
+      var bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      return bytes;
+    }}
+
+    function decodeBase64Float32(b64) {{
+      var bytes = decodeBase64Bytes(b64);
+      return new Float32Array(bytes.buffer);
+    }}
+
+    function decodeBase64Uint16(b64) {{
+      var bytes = decodeBase64Bytes(b64);
+      return new Uint16Array(bytes.buffer);
+    }}
+
+    function decodeProjectionRowsPacked(rows) {{
+      var out = [];
+      for (var r = 0; r < rows.length; r++) {{
+        var row = rows[r] || {{}};
+        var dst = {{}};
+        for (var key in row) {{
+          if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+          var val = row[key];
+          if (val && typeof val === "object" && Object.prototype.hasOwnProperty.call(val, "_f32_b64")) dst[key] = decodeBase64Float32(val._f32_b64 || "");
+          else dst[key] = val;
+        }}
+        out.push(dst);
+      }}
+      return out;
+    }}
+
+    const DATA_FULL_UNSORTED = decodeProjectionRowsPacked(DATA_FULL_UNSORTED_PACKED);
+    const DATA_FULL_SORTED = decodeProjectionRowsPacked(DATA_FULL_SORTED_PACKED);
+    const DATA_HALF_UNSORTED = decodeProjectionRowsPacked(DATA_HALF_UNSORTED_PACKED);
+    const DATA_HALF_SORTED = decodeProjectionRowsPacked(DATA_HALF_SORTED_PACKED);
+    const DATA_TIE_UNSORTED = decodeProjectionRowsPacked(DATA_TIE_UNSORTED_PACKED);
+    const DATA_TIE_SORTED = decodeProjectionRowsPacked(DATA_TIE_SORTED_PACKED);
+
     function getDataIndex(n) {{ return n - {n_min}; }}
+
+    function getBinomialPoint(n, pIdx) {{
+      if (!Object.prototype.hasOwnProperty.call(BINOMIAL_CACHE_BY_N, n)) {{
+        var row = BINOMIAL_PACKED.by_n[String(n)];
+        if (!row) return null;
+        BINOMIAL_CACHE_BY_N[n] = {{
+          rowLen: row.row_len,
+          y: decodeBase64Float32(row.y_f32_b64 || ""),
+          perm: decodeBase64Uint16(row.perm_u16_b64 || "")
+        }};
+      }}
+      var d = BINOMIAL_CACHE_BY_N[n];
+      if (!d || pIdx < 0 || pIdx >= BINOMIAL_PACKED.p_steps) return null;
+      var base = pIdx * d.rowLen;
+      var x = Array.from({{ length: d.rowLen }}, function(_, i) {{ return i; }});
+      var y = Array.from(d.y.slice(base, base + d.rowLen));
+      var perm = Array.from(d.perm.slice(base, base + d.rowLen));
+      return {{ x: x, y: y, perm: perm }};
+    }}
 
     function getProjectionData() {{
       const range = document.getElementById("pca-range").value;
@@ -235,7 +362,8 @@ def build_explorer2_dual_panel_html_document(
       document.getElementById("p-value").textContent = P_LABELS[pIdx].toFixed(4);
       document.getElementById("n-value").textContent = n;
       const sortLeft = document.getElementById("display-left").value === "sorted";
-      const point = BINOMIAL_DATA[getBinomialIndex(n, pIdx)];
+      const point = getBinomialPoint(n, pIdx);
+      if (!point) return;
       let xData, yData, colors, xaxisOverride;
       if (sortLeft && point.perm) {{
         xData = point.x;
@@ -321,7 +449,7 @@ def build_explorer2_dual_panel_html_document(
 
     function updateAll() {{ updateLeft(); updateRight(); }}
 
-    var binInit = BINOMIAL_DATA[getBinomialIndex({n_min}, {p_default_idx})];
+    var binInit = getBinomialPoint({n_min}, {p_default_idx});
     var colorsInit = binInit.x.map(function(k) {{ return colorForK(k, binInit.x.length - 1); }});
     var xMinInit = Math.min(...binInit.x), xMaxInit = Math.max(...binInit.x);
     Plotly.newPlot("graph-left", [

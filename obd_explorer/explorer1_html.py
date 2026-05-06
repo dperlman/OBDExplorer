@@ -2,9 +2,73 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from matplotlib import colormaps
 from matplotlib.colors import to_hex
+import numpy as np
+
+
+def _pack_float32_base64(values: list[float] | tuple[float, ...]) -> str:
+    if not values:
+        return ""
+    arr = np.asarray(values, dtype=np.float32)
+    return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _pack_uint16_base64(values: list[int] | tuple[int, ...]) -> str:
+    if not values:
+        return ""
+    arr = np.asarray(values, dtype=np.uint16)
+    return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _pack_binomial_payload_base64_by_n(
+    binomial_data: list,
+    *,
+    n_min: int,
+    n_max: int,
+    p_steps: int,
+) -> dict[str, object]:
+    packed_by_n: dict[str, dict[str, object]] = {}
+    for n in range(n_min, n_max + 1):
+        row_len = n + 1
+        y_flat: list[float] = []
+        perm_flat: list[int] = []
+        base_idx = (n - n_min) * p_steps
+        for p_idx in range(p_steps):
+            pt = binomial_data[base_idx + p_idx]
+            y_vals = pt.get("y") if isinstance(pt, dict) else None
+            perm_vals = pt.get("perm") if isinstance(pt, dict) else None
+            if not isinstance(y_vals, list) or not isinstance(perm_vals, list):
+                raise ValueError(f"Invalid binomial row for n={n}, p_idx={p_idx}")
+            if len(y_vals) != row_len or len(perm_vals) != row_len:
+                raise ValueError(
+                    f"Unexpected row length for n={n}, p_idx={p_idx}: "
+                    f"got y={len(y_vals)} perm={len(perm_vals)} expected={row_len}"
+                )
+            y_flat.extend(float(v) for v in y_vals)
+            perm_flat.extend(int(v) for v in perm_vals)
+        packed_by_n[str(n)] = {
+            "row_len": row_len,
+            "y_f32_b64": _pack_float32_base64(y_flat),
+            "perm_u16_b64": _pack_uint16_base64(perm_flat),
+        }
+    return {
+        "n_min": n_min,
+        "n_max": n_max,
+        "p_steps": p_steps,
+        "by_n": packed_by_n,
+    }
+
+
+def _pack_tie_points_base64_by_n(tie_points_by_n: dict) -> dict[str, str]:
+    packed: dict[str, str] = {}
+    for n_key, vals in tie_points_by_n.items():
+        if not isinstance(vals, list):
+            continue
+        packed[str(n_key)] = _pack_float32_base64([float(v) for v in vals])
+    return packed
 
 
 def build_explorer1_html(
@@ -18,9 +82,18 @@ def build_explorer1_html(
     include_tie_points: bool = True,
     colorscale: str = "viridis",
 ) -> str:
+    binomial_packed_json = json.dumps(
+        _pack_binomial_payload_base64_by_n(
+            binomial_data,
+            n_min=n_min,
+            n_max=n_max,
+            p_steps=p_steps,
+        ),
+        separators=(",", ":"),
+    )
     p_half_start = (p_steps - 1) // 2
     p_labels_json = json.dumps([round(p, 4) for p in p_values])
-    tie_points_json = json.dumps(tie_points_by_n)
+    tie_points_packed_json = json.dumps(_pack_tie_points_base64_by_n(tie_points_by_n), separators=(",", ":"))
     color_lut_json = json.dumps([to_hex(colormaps[colorscale](i / 255.0), keep_alpha=False) for i in range(256)])
     p_idx_max = p_steps - 1
     p_default_hi = min(p_half_start + 50, p_idx_max)
@@ -267,13 +340,72 @@ def build_explorer1_html(
   </div>
 
   <script>
-    const BINOMIAL_DATA = {json.dumps(binomial_data)};
+    const BINOMIAL_PACKED = {binomial_packed_json};
     const P_LABELS = {p_labels_json};
-    const TIE_POINTS_BY_N = {tie_points_json};
+    const TIE_POINTS_PACKED = {tie_points_packed_json};
     const INCLUDE_TIE_POINTS = {"true" if include_tie_points else "false"};
     const COLOR_LUT = {color_lut_json};
 
-    function getBinomialIndex(n, pIdx) {{ return (n - {n_min}) * {p_steps} + pIdx; }}
+    function decodeBase64Bytes(b64) {{
+      if (!b64) return new Uint8Array(0);
+      var raw = atob(b64);
+      var bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      return bytes;
+    }}
+
+    function decodeBase64Float32(b64) {{
+      var bytes = decodeBase64Bytes(b64);
+      return new Float32Array(bytes.buffer);
+    }}
+
+    function decodeBase64Uint16(b64) {{
+      var bytes = decodeBase64Bytes(b64);
+      return new Uint16Array(bytes.buffer);
+    }}
+
+    function decodeTiePointsPacked(src) {{
+      var out = {{}};
+      for (var nKey in src) {{
+        if (!Object.prototype.hasOwnProperty.call(src, nKey)) continue;
+        out[nKey] = decodeBase64Float32(src[nKey] || "");
+      }}
+      return out;
+    }}
+
+    const TIE_POINTS_BY_N = decodeTiePointsPacked(TIE_POINTS_PACKED);
+    const BINOMIAL_CACHE_BY_N = {{}};
+
+    function getBinomialRowData(n) {{
+      if (Object.prototype.hasOwnProperty.call(BINOMIAL_CACHE_BY_N, n)) return BINOMIAL_CACHE_BY_N[n];
+      var packed = BINOMIAL_PACKED.by_n[String(n)];
+      if (!packed) {{
+        BINOMIAL_CACHE_BY_N[n] = null;
+        return null;
+      }}
+      var row = {{
+        rowLen: packed.row_len,
+        y: decodeBase64Float32(packed.y_f32_b64 || ""),
+        perm: decodeBase64Uint16(packed.perm_u16_b64 || "")
+      }};
+      BINOMIAL_CACHE_BY_N[n] = row;
+      return row;
+    }}
+
+    function expectedRankByNP(n, pIdx) {{
+      var row = getBinomialRowData(n);
+      if (!row) return NaN;
+      var rowLen = row.rowLen;
+      if (pIdx < 0 || pIdx >= BINOMIAL_PACKED.p_steps) return NaN;
+      var base = pIdx * rowLen;
+      var e = 0;
+      for (var i = 0; i < rowLen; i++) {{
+        var permIdx = row.perm[base + i];
+        e += i * row.y[base + permIdx];
+      }}
+      return e;
+    }}
+
     const P_HALF_START = {p_half_start};
     const P_IDX_MAX = {p_idx_max};
     var nRangeLo = {n_min}, nRangeHi = 10;
@@ -480,13 +612,6 @@ def build_explorer1_html(
         updateGraph();
     }}
 
-    function expectedRank(point) {{
-      var n = point.x.length - 1;
-      var e = 0;
-      for (var i = 0; i <= n; i++) e += i * point.y[point.perm[i]];
-      return e;
-    }}
-
     /** Subtract secant through first/last finite (x,y); all such curves share y=0 at both ends. */
     function subtractEndpointChord(xs, ys) {{
       var n = Math.min(xs.length, ys.length);
@@ -515,8 +640,7 @@ def build_explorer1_html(
       for (var i = P_HALF_START; i < {p_steps}; i++) {{
         var pVal = parseFloat(P_LABELS[i]);
         xArr.push(pVal);
-        var pt = BINOMIAL_DATA[getBinomialIndex(n, i)];
-        var e = sorted ? expectedRank(pt) : n * pVal;
+        var e = sorted ? expectedRankByNP(n, i) : n * pVal;
         if (scaleMode === "by_n") {{
           if (!sorted) yArr.push(pVal);
           else yArr.push(e / n);
@@ -617,10 +741,8 @@ def build_explorer1_html(
             var pValM = parseFloat(P_LABELS[pIx]);
             var xPart = [], yPart = [];
             for (var nVal = {n_min}; nVal <= {n_max}; nVal++) {{
-              var idxM = getBinomialIndex(nVal, pIx);
-              if (idxM >= BINOMIAL_DATA.length) {{ yPart.push(NaN); xPart.push(nVal); continue; }}
-              var ptM = BINOMIAL_DATA[idxM];
-              var eM = sorted ? expectedRank(ptM) : nVal * pValM;
+              var eM = sorted ? expectedRankByNP(nVal, pIx) : nVal * pValM;
+              if (!Number.isFinite(eM) && sorted) {{ yPart.push(NaN); xPart.push(nVal); continue; }}
               xPart.push(nVal);
               if (scaleMode === "by_n") {{
                 if (!sorted) yPart.push(pValM);
@@ -638,10 +760,8 @@ def build_explorer1_html(
           xArr = [];
           yArr = [];
           for (var nVal = {n_min}; nVal <= {n_max}; nVal++) {{
-            var idx = getBinomialIndex(nVal, pIdx);
-            if (idx >= BINOMIAL_DATA.length) {{ yArr.push(NaN); xArr.push(nVal); continue; }}
-            var pt = BINOMIAL_DATA[idx];
-            var e = sorted ? expectedRank(pt) : nVal * pVal;
+            var e = sorted ? expectedRankByNP(nVal, pIdx) : nVal * pVal;
+            if (!Number.isFinite(e) && sorted) {{ yArr.push(NaN); xArr.push(nVal); continue; }}
             xArr.push(nVal);
             if (scaleMode === "by_n") {{
               if (!sorted) yArr.push(pVal);
