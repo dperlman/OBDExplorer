@@ -7,7 +7,7 @@ import os
 
 import numpy as np
 
-from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
+from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, _is_canonical_center_tie, iter_tie_points_from_shards
 from obd_explorer.explorer7_html import build_explorer7_html
 
 
@@ -65,10 +65,22 @@ def _tie_proxy_rows_by_n(
         slope_list = payload.get("tie_slope_by_n") if isinstance(payload, dict) else None
         slopes = list(slope_list) if isinstance(slope_list, list) else []
 
+        center_idx: int | None = None
+        for rec_idx, rec in enumerate(recs):
+            if not isinstance(rec, (list, tuple)) or len(rec) != 2:
+                continue
+            pairs = rec[1] if isinstance(rec[1], list) else []
+            if _is_canonical_center_tie(int(n), list(pairs)):
+                center_idx = rec_idx
+                break
+
         p_src: list[float] = []
         val_src: dict[str, list[float]] = {k: [] for k in _TIE_FIELDS}
         for rec_idx, rec in enumerate(recs):
             if not isinstance(rec, (list, tuple)) or len(rec) != 2:
+                continue
+            # Variant 7 rule: skip canonical center tie (native tie index 0).
+            if center_idx is not None and rec_idx == center_idx:
                 continue
             p = float(rec[0])
             if not np.isfinite(p):

@@ -380,9 +380,9 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
             [
                 (
                     "p_steps",
-                    'p_steps ("1001"|"10001")',
-                    parse_p_steps,
-                    "Number of p-grid samples between p_min and p_max for nearest-tie proxy values.",
+                    "p_steps",
+                    int,
+                    "Number of p-grid samples between p_min and p_max for nearest-tie proxy values (integer >= 2).",
                 ),
                 (
                     "p_min",
@@ -441,6 +441,7 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
     if variant == 7:
         key_by_field["p_min"] = "p"
         key_by_field["p_max"] = "r"
+        key_by_field["colorscale"] = "c"
     keymap = _build_menu_keymap(
         fields,
         key_by_field=key_by_field,
@@ -494,6 +495,9 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
             if int(cfg["variant"]) in (5, 6):
                 return argparse.Namespace(**cfg)
             if int(cfg["variant"]) == 7:
+                if int(cfg["p_steps"]) < 2:
+                    print("p_steps must be >= 2.", file=sys.stderr)
+                    continue
                 if float(cfg["p_min"]) > float(cfg["p_max"]):
                     print("p_min must be <= p_max.", file=sys.stderr)
                     continue
