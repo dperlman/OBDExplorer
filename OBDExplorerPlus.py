@@ -62,7 +62,7 @@ HTML_COLOR_SCALE_CHOICES: tuple[str, ...] = (
     "gist_ncar",
 )
 
-HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
+HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n", "eslope_n")
 TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
 HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
 
@@ -877,7 +877,7 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             "value",
             f'value ({"/".join(HEATMAP_VALUE_CHOICES)})',
             _parse_heatmap_value,
-            'Heatmap value: "ev_n" = expected_sorted / n, "eslope_n" = expected_sorted_slope / n.',
+            'Heatmap value: i/j/l/r/d/e use nearest-tie proxy per p; "ev_n"/"eslope_n" use graph shards.',
         ),
     ]
 
@@ -1532,7 +1532,7 @@ def main() -> None:
         "--value",
         default="ev_n",
         choices=HEATMAP_VALUE_CHOICES,
-        help='Heatmap value: "ev_n" (expected_sorted/n) or "eslope_n" (expected_sorted_slope/n).',
+        help='Heatmap value: i/j/l/r/d/e from nearest tie proxy, or "ev_n"/"eslope_n" from graph shards.',
     )
     p_hm.add_argument(
         "--colormap",
