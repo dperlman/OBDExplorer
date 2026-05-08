@@ -1,0 +1,14 @@
+---
+description: Include docs/ (GitHub Pages) when shipping demos and examples
+alwaysApply: true
+---
+
+# GitHub Pages: `docs/`
+
+This repo publishes **GitHub Pages from `/docs`**. Tracked content includes `docs/index.html`, the embedded HTML demos (`docs/OBDExplorer*.html`), and static examples under **`docs/plots/`**.
+
+## Agent workflow
+
+When work adds or changes something user-visible on the site (new variant HTML, example PNGs, index links, copy updates), **include the matching files under `docs/` in the same commit or PR as the code** when practical. Do not leave `docs/` updates as an afterthought unless the user opts out.
+
+If generating a new example image for `docs/plots/`, add a link from `docs/index.html` in the **Example Plots** section when it is meant to be showcased.
