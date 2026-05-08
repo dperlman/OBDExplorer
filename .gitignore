@@ -2,6 +2,8 @@
 /data/
 /html/
 /html_old/
+/plots/
+/plots_old/
 
 # Python
 __pycache__/
