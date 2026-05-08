@@ -1,8 +1,10 @@
 # Large local datasets (not for GitHub)
 /data/
-/html/
+/html/*
+!/html/.gitkeep
 /html_old/
-/plots/
+/plots/*
+!/plots/.gitkeep
 /plots_old/
 
 # Python
