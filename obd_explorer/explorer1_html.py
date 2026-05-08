@@ -72,7 +72,7 @@ def _pack_tie_points_base64_by_n(tie_points_by_n: dict) -> dict[str, str]:
 
 
 def build_explorer1_html(
-    binomial_data: list,
+    binomial_data: list | None,
     tie_points_by_n: dict,
     *,
     n_min: int,
@@ -81,16 +81,20 @@ def build_explorer1_html(
     p_values: list[float],
     include_tie_points: bool = True,
     colorscale: str = "viridis",
+    binomial_packed_override: dict | None = None,
 ) -> str:
-    binomial_packed_json = json.dumps(
-        _pack_binomial_payload_base64_by_n(
+    if binomial_packed_override is None:
+        if binomial_data is None:
+            raise ValueError("binomial_data must be provided when binomial_packed_override is not set.")
+        binomial_packed = _pack_binomial_payload_base64_by_n(
             binomial_data,
             n_min=n_min,
             n_max=n_max,
             p_steps=p_steps,
-        ),
-        separators=(",", ":"),
-    )
+        )
+    else:
+        binomial_packed = dict(binomial_packed_override)
+    binomial_packed_json = json.dumps(binomial_packed, separators=(",", ":"))
     p_half_start = (p_steps - 1) // 2
     p_labels_json = json.dumps([round(p, 4) for p in p_values])
     tie_points_packed_json = json.dumps(_pack_tie_points_base64_by_n(tie_points_by_n), separators=(",", ":"))

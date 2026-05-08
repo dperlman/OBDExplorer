@@ -263,7 +263,7 @@ def _parse_export_backend(text: str) -> str:
 
 
 def _parse_variant_explorer(text: str) -> int:
-    choice = _parse_choice(text, ("1", "2", "3", "4", "5", "6"), field="variant")
+    choice = _parse_choice(text, ("1", "2", "3", "4", "5", "6", "7"), field="variant")
     return int(choice)
 
 
@@ -293,6 +293,10 @@ _HTML_EXPLORER_VARIANTS: tuple[tuple[int, str], ...] = (
         6,
         "Tie vs tie # — same fields as variant 5 but x = tie index; Multiple controls n (tie shards only).",
     ),
+    (
+        7,
+        "Nearest tie values graph explorer — variant 1 style with i/j/l/r/d/e sampled from nearest tie on configurable p-grid.",
+    ),
 )
 
 
@@ -302,19 +306,19 @@ def _interactive_html_pick_variant() -> int | None:
         print(f"  {num}) {desc}")
     print("  q) Cancel")
     while True:
-        raw = input("Variant [1–6 or q]: ").strip().lower()
+        raw = input("Variant [1–7 or q]: ").strip().lower()
         if raw == "":
             continue
         if raw in ("q", "quit"):
             print("Cancelled.")
             return None
-        if raw in ("1", "2", "3", "4", "5", "6"):
+        if raw in ("1", "2", "3", "4", "5", "6", "7"):
             return int(raw)
-        print("Enter 1–6 or q.", file=sys.stderr)
+        print("Enter 1–7 or q.", file=sys.stderr)
 
 
 def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | None:
-    default_n_max = 200 if variant in (1, 5, 6) else 100
+    default_n_max = 200 if variant in (1, 5, 6, 7) else 100
     cfg: dict[str, object] = {
         "variant": variant,
         "output": _default_html_output_for_variant(variant),
@@ -326,10 +330,14 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
         "verbose": False,
         "open_browser": False,
     }
-    if variant not in (5, 6):
+    if variant in (1, 2, 3, 4):
         cfg["p_steps"] = DEFAULT_GRAPH_P_STEPS
         cfg["graph_manifest"] = None
         cfg["graph_shards_dir"] = None
+    elif variant == 7:
+        cfg["p_steps"] = DEFAULT_GRAPH_P_STEPS
+        cfg["p_min"] = 0.5
+        cfg["p_max"] = 0.6
 
     parse_p_steps = _make_parse_p_steps(cfg)
 
@@ -354,7 +362,7 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
             "Upper n bound within precomputed shards. Larger ranges can make HTML generation slower.",
         ),
     ]
-    if variant not in (5, 6):
+    if variant in (1, 2, 3, 4):
         fields.extend(
             [
                 (
@@ -367,12 +375,35 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
                 ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory containing graph shards/manifests."),
             ]
         )
+    if variant == 7:
+        fields.extend(
+            [
+                (
+                    "p_steps",
+                    "p_steps",
+                    int,
+                    "Number of p-grid samples between p_min and p_max for nearest-tie proxy values (integer >= 2).",
+                ),
+                (
+                    "p_min",
+                    "p_min",
+                    float,
+                    "Lower p bound for variant 7 nearest-tie sampling grid.",
+                ),
+                (
+                    "p_max",
+                    "p_max",
+                    float,
+                    "Upper p bound for variant 7 nearest-tie sampling grid (must be >= p_min).",
+                ),
+            ]
+        )
     fields.extend(
         [
             ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to tie shard manifest."),
         ]
     )
-    if variant in (1, 5, 6):
+    if variant in (1, 5, 6, 7):
         fields.append(
             (
                 "colorscale",
@@ -406,6 +437,10 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
     key_by_field = {"n_min": "n", "n_max": "m", "verbose": "v"}
     if variant == 1:
         key_by_field["p_steps"] = "p"
+        key_by_field["colorscale"] = "c"
+    if variant == 7:
+        key_by_field["p_min"] = "p"
+        key_by_field["p_max"] = "r"
         key_by_field["colorscale"] = "c"
     keymap = _build_menu_keymap(
         fields,
@@ -451,22 +486,30 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
             print(f"{hk}) {label}\n    {detail}\n")
             continue
         if cmd == "g":
-            if int(cfg["variant"]) not in (1, 2, 3, 4, 5, 6):
-                print("variant must be 1, 2, 3, 4, 5, or 6.", file=sys.stderr)
+            if int(cfg["variant"]) not in (1, 2, 3, 4, 5, 6, 7):
+                print("variant must be 1, 2, 3, 4, 5, 6, or 7.", file=sys.stderr)
                 continue
             if int(cfg["n_min"]) > int(cfg["n_max"]):
                 print("n_min must be <= n_max.", file=sys.stderr)
                 continue
             if int(cfg["variant"]) in (5, 6):
                 return argparse.Namespace(**cfg)
-            valid_p_steps = _discover_available_graph_p_steps(cfg)
-            if int(cfg["p_steps"]) not in valid_p_steps:
-                shown = "|".join(str(x) for x in valid_p_steps)
-                print(
-                    f"p_steps must be one of ({shown}) based on available graph manifests.",
-                    file=sys.stderr,
-                )
-                continue
+            if int(cfg["variant"]) == 7:
+                if int(cfg["p_steps"]) < 2:
+                    print("p_steps must be >= 2.", file=sys.stderr)
+                    continue
+                if float(cfg["p_min"]) > float(cfg["p_max"]):
+                    print("p_min must be <= p_max.", file=sys.stderr)
+                    continue
+            else:
+                valid_p_steps = _discover_available_graph_p_steps(cfg)
+                if int(cfg["p_steps"]) not in valid_p_steps:
+                    shown = "|".join(str(x) for x in valid_p_steps)
+                    print(
+                        f"p_steps must be one of ({shown}) based on available graph manifests.",
+                        file=sys.stderr,
+                    )
+                    continue
             return argparse.Namespace(**cfg)
         field_entry = keymap.get(cmd)
         if field_entry is None:
@@ -1344,8 +1387,23 @@ def _run_html(args: argparse.Namespace) -> None:
             verbose=True,
             progress=progress,
         )
+    elif v == 7:
+        from obd_explorer.explorer7_export import write_explorer7_html
+
+        write_explorer7_html(
+            out,
+            n_min=args.n_min,
+            n_max=args.n_max,
+            p_steps=args.p_steps,
+            p_min=args.p_min,
+            p_max=args.p_max,
+            tie_manifest=args.tie_manifest,
+            colorscale=getattr(args, "colorscale", "viridis"),
+            verbose=True,
+            progress=progress,
+        )
     else:
-        print("--variant must be 1, 2, 3, 4, 5, or 6.", file=sys.stderr)
+        print("--variant must be 1, 2, 3, 4, 5, 6, or 7.", file=sys.stderr)
         sys.exit(2)
     if args.open_browser:
         webbrowser.open(os.path.abspath(out))
@@ -1417,10 +1475,11 @@ def main() -> None:
     p_html.add_argument(
         "--variant",
         type=int,
-        choices=(1, 2, 3, 4, 5, 6),
+        choices=(1, 2, 3, 4, 5, 6, 7),
         required=True,
         help="1=graph (shards), 2=two-panel binomial+PCA (shards), 3=quad+E[X] (shards), 4=PCA-only (shards), "
-        "5=tie scalar vs n (tie shards), 6=tie scalar vs tie # (tie shards).",
+        "5=tie scalar vs n (tie shards), 6=tie scalar vs tie # (tie shards), "
+        "7=nearest tie values graph explorer (variant-1 style with nearest-tie i/j/l/r/d/e on p-grid).",
     )
     p_html.add_argument(
         "-o",
@@ -1436,6 +1495,8 @@ def main() -> None:
     )
     _add_data_args(p_html)
     p_html.set_defaults(n_max=200)
+    p_html.add_argument("--p-min", type=float, default=0.5, help="(Variant 7) lower p bound for nearest-tie sampling grid.")
+    p_html.add_argument("--p-max", type=float, default=0.6, help="(Variant 7) upper p bound for nearest-tie sampling grid.")
     p_html.add_argument(
         "--verbose",
         action="store_true",
