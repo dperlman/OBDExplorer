@@ -693,6 +693,53 @@ def load_tie_points_from_shards(
     If ``progress`` is a positive integer ``N``, prints timing on stderr every ``N`` processed
     ``n`` values (and on the last). ``None`` or ``0`` disables progress reporting.
     """
+    float_by_n: dict[int, np.ndarray] = {}
+    float_with_pairs_by_n: dict[int, list[tuple[float, list[tuple[int, int]]]]] = {}
+    tie_slope_by_n: dict[int, list[dict]] = {}
+    for n, n_payload in iter_tie_points_from_shards(
+        path=path,
+        n_list=n_list,
+        require_all=require_all,
+        progress=progress,
+        include_float_by_n=True,
+        include_float_with_pairs_by_n=True,
+        include_tie_slope_by_n=True,
+    ):
+        float_by_n[n] = n_payload["float_by_n"]
+        float_with_pairs_by_n[n] = n_payload["float_with_pairs_by_n"]
+        tie_slope_by_n[n] = n_payload["tie_slope_by_n"]
+
+    return {
+        "float_by_n": float_by_n,
+        "float_with_pairs_by_n": float_with_pairs_by_n,
+        "tie_slope_by_n": tie_slope_by_n,
+    }
+
+
+def iter_tie_points_from_shards(
+    path: str = DEFAULT_TIE_OUTPUT,
+    n_list: list[int] | None = None,
+    require_all: bool = True,
+    *,
+    progress: int | None = None,
+    include_float_by_n: bool = False,
+    include_float_with_pairs_by_n: bool = True,
+    include_tie_slope_by_n: bool = True,
+):
+    """Yield tie-point shard payload one ``n`` at a time.
+
+    Each yielded item is ``(n, payload_for_n)`` where ``payload_for_n`` only includes
+    requested keys (from ``float_by_n``, ``float_with_pairs_by_n``, ``tie_slope_by_n``).
+    This allows callers to stream over shards without keeping the full manifest payload
+    resident in RAM.
+    """
+    if (
+        not include_float_by_n
+        and not include_float_with_pairs_by_n
+        and not include_tie_slope_by_n
+    ):
+        raise ValueError("iter_tie_points_from_shards: at least one include_* flag must be True.")
+
     with open(path, "rb") as f:
         manifest = pickle.load(f)
 
@@ -716,12 +763,9 @@ def load_tie_points_from_shards(
     if progress is not None and progress > 0:
         progress_every = int(progress)
 
-    float_by_n: dict[int, np.ndarray] = {}
-    float_with_pairs_by_n: dict[int, list[tuple[float, list[tuple[int, int]]]]] = {}
-    tie_slope_by_n: dict[int, list[dict]] = {}
-
     total = len(target_ns)
     t0 = time.perf_counter()
+    yielded = 0
     if progress_every:
         if total == 0:
             print("[html] tie shards: no n values to load", file=sys.stderr)
@@ -761,40 +805,47 @@ def load_tie_points_from_shards(
                     raise ValueError(f"Invalid shard payload for n={n}: {shard_path!r}.")
                 continue
 
-            if "float_by_n" not in shard_payload or "float_with_pairs_by_n" not in shard_payload or "tie_slope_by_n" not in shard_payload:
+            need_keys: list[str] = []
+            if include_float_by_n:
+                need_keys.append("float_by_n")
+            if include_float_with_pairs_by_n:
+                need_keys.append("float_with_pairs_by_n")
+            if include_tie_slope_by_n:
+                need_keys.append("tie_slope_by_n")
+            missing = [k for k in need_keys if k not in shard_payload]
+            if missing:
                 if require_all:
                     raise ValueError(
-                        f"Shard payload missing required keys for n={n}: {shard_path!r}."
+                        f"Shard payload missing required keys for n={n}: {missing} in {shard_path!r}."
                     )
                 continue
 
-            float_by_n[n] = shard_payload["float_by_n"]
-            float_with_pairs_by_n[n] = shard_payload["float_with_pairs_by_n"]
-            tie_slope_by_n[n] = shard_payload["tie_slope_by_n"]
+            out_payload: dict[str, object] = {}
+            if include_float_by_n:
+                out_payload["float_by_n"] = shard_payload["float_by_n"]
+            if include_float_with_pairs_by_n:
+                out_payload["float_with_pairs_by_n"] = shard_payload["float_with_pairs_by_n"]
+            if include_tie_slope_by_n:
+                out_payload["tie_slope_by_n"] = shard_payload["tie_slope_by_n"]
+            yielded += 1
+            yield n, out_payload
         finally:
             if progress_every and total:
                 pe = progress_every
                 if step_index % pe == 0 or step_index == total:
                     elapsed = time.perf_counter() - t0
-                    nk = len(float_with_pairs_by_n)
                     print(
                         f"[html] tie shards: n={n} step {step_index}/{total} "
-                        f"elapsed {elapsed:.2f}s loaded_n={nk}",
+                        f"elapsed {elapsed:.2f}s loaded_n={yielded}",
                         file=sys.stderr,
                     )
 
     if progress_every and total:
         elapsed = time.perf_counter() - t0
         print(
-            f"[html] tie shards: done loaded_n={len(float_with_pairs_by_n)} in {elapsed:.2f}s",
+            f"[html] tie shards: done loaded_n={yielded} in {elapsed:.2f}s",
             file=sys.stderr,
         )
-
-    return {
-        "float_by_n": float_by_n,
-        "float_with_pairs_by_n": float_with_pairs_by_n,
-        "tie_slope_by_n": tie_slope_by_n,
-    }
 
 
 def load_graph_data_from_shards(

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
-from OBDsaveSourceData import DEFAULT_TIE_OUTPUT
+from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
 
 from obd_explorer.explorer6_html import build_explorer6_html
-from obd_explorer.explorer1_export import _load_tie_payload
-from obd_explorer.html_data import tie_explorer5_series_by_n
+from obd_explorer.html_data import tie_explorer5_series_by_n_stream
 
 
 def write_explorer6_html(
@@ -22,19 +22,26 @@ def write_explorer6_html(
     progress: bool = False,
 ) -> None:
     n_vals = list(range(n_min, n_max + 1))
-    tie_payload = _load_tie_payload(
-        tie_manifest,
-        n_vals,
-        progress=(10 if progress else None),
-    )
-    if not tie_payload.get("float_with_pairs_by_n") and not tie_payload.get("float_by_n"):
+    man = tie_manifest or DEFAULT_TIE_OUTPUT
+    if os.path.isfile(man):
+        n_rows = iter_tie_points_from_shards(
+            path=man,
+            n_list=n_vals,
+            require_all=False,
+            progress=(10 if progress else None),
+            include_float_by_n=False,
+            include_float_with_pairs_by_n=True,
+            include_tie_slope_by_n=True,
+        )
+        tie_data = tie_explorer5_series_by_n_stream(n_rows, n_min, n_max, progress=progress)
+    else:
+        tie_data = {}
+    if not tie_data:
         if verbose:
-            man = tie_manifest or DEFAULT_TIE_OUTPUT
             print(
                 f"WARNING: No tie shard manifest at {man!r}; plot will be empty.\n",
                 file=sys.stderr,
             )
-    tie_data = tie_explorer5_series_by_n(tie_payload, n_min, n_max, progress=progress)
     html = build_explorer6_html(tie_data, n_min=n_min, n_max=n_max, colorscale=colorscale)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)

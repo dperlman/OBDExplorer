@@ -172,6 +172,115 @@ EXPLORER5_EMBEDDED_ROW_COUNT = EXPLORER5_CENTER_ARM_LENGTH + EXPLORER5_TAIL_ARM_
 EXPLORER5_MAX_TIE_INDEX = EXPLORER5_EMBEDDED_ROW_COUNT - 1
 
 
+def _tie_explorer5_series_row_for_n(
+    n: int,
+    recs: list[Any],
+    slope_recs: list[Any] | None,
+) -> dict[str, Any] | None:
+    """Build one variant 5/6 embedded row payload for a single ``n``."""
+    m = len(recs)
+    if m == 0:
+        return None
+
+    center_idx: int | None = None
+    for rec_idx, item in enumerate(recs):
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        pairs = item[1]
+        plist = list(pairs) if pairs else []
+        if _is_canonical_center_tie(int(n), plist):
+            center_idx = rec_idx
+            break
+
+    if center_idx is None:
+        raise ValueError(f"n={n}: missing canonical center tie point in float_with_pairs_by_n")
+
+    m_nonneg = m - center_idx
+    if m_nonneg <= 0:
+        raise ValueError(f"n={n}: invalid center index {center_idx} for {m} tie rows")
+
+    forward_native: set[int] = set()
+    for t in range(EXPLORER5_CENTER_ARM_LENGTH):
+        ri = center_idx + t
+        if 0 <= t < m_nonneg and 0 <= ri < m:
+            forward_native.add(t)
+
+    backward_native: set[int] = set()
+    tail_start = max(0, m_nonneg - EXPLORER5_TAIL_ARM_LENGTH)
+    for t in range(tail_start, m_nonneg):
+        ri = center_idx + t
+        if 0 <= ri < m:
+            backward_native.add(t)
+
+    selected_native = sorted(forward_native | backward_native)
+    if not selected_native:
+        return None
+
+    slope_list: list[dict[str, Any]] = list(slope_recs) if isinstance(slope_recs, list) else []
+    ps: list[float] = []
+    iv: list[int | None] = []
+    jv: list[int | None] = []
+    lv: list[float | None] = []
+    rv: list[float | None] = []
+    ev_ns: list[float | None] = []
+    for t in selected_native:
+        rec_idx = center_idx + t
+        if not (0 <= rec_idx < m):
+            continue
+        item = recs[rec_idx]
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        _, pairs = item[0], item[1]
+        pf = float(item[0])
+        pi, pj = None, None
+        plist = pairs or []
+        if plist:
+            first = plist[0]
+            if isinstance(first, (list, tuple)) and len(first) == 2:
+                pi, pj = int(first[0]), int(first[1])
+        sl: float | None = None
+        sr: float | None = None
+        evn: float | None = None
+        if rec_idx < len(slope_list) and isinstance(slope_list[rec_idx], dict):
+            sd = slope_list[rec_idx]
+            raw_sl = sd.get("slope_left")
+            raw_sr = sd.get("slope_right")
+            if raw_sl is not None and np.isfinite(float(raw_sl)):
+                sl = float(raw_sl)
+            if raw_sr is not None and np.isfinite(float(raw_sr)):
+                sr = float(raw_sr)
+            raw_es = sd.get("expected_sorted")
+            if raw_es is not None and np.isfinite(float(raw_es)):
+                evn = float(raw_es) / float(n)
+        ps.append(round(pf, 6))
+        iv.append(pi)
+        jv.append(pj)
+        lv.append(sl)
+        rv.append(sr)
+        ev_ns.append(evn)
+
+    dv: list[float | None] = []
+    ev: list[float | None] = []
+    for a, b in zip(lv, rv):
+        if a is not None and b is not None:
+            dv.append(float(b - a))
+            ev.append(float(a - b))
+        else:
+            dv.append(None)
+            ev.append(None)
+
+    return {
+        "p": ps,
+        "i": iv,
+        "j": jv,
+        "l": lv,
+        "r": rv,
+        "d": dv,
+        "e": ev,
+        "ev_n": ev_ns,
+    }
+
+
 def tie_explorer5_series_by_n(
     tie_payload: dict[str, Any],
     n_min: int,
@@ -217,110 +326,9 @@ def tie_explorer5_series_by_n(
             slope_recs = slope_by_n.get(n)
             if slope_recs is None and isinstance(slope_by_n, dict):
                 slope_recs = slope_by_n.get(str(n))
-            slope_list: list[dict[str, Any]] = list(slope_recs) if isinstance(slope_recs, list) else []
-
-            m = len(recs)
-            if m == 0:
-                continue
-
-            center_idx: int | None = None
-            tie_ps: list[float] = [float("nan")] * m
-            for rec_idx, item in enumerate(recs):
-                if not isinstance(item, (list, tuple)) or len(item) != 2:
-                    continue
-                p_raw = float(item[0])
-                tie_ps[rec_idx] = p_raw
-                pairs = item[1]
-                plist = list(pairs) if pairs else []
-                if _is_canonical_center_tie(int(n), plist):
-                    center_idx = rec_idx
-                    break
-
-            if center_idx is None:
-                raise ValueError(f"n={n}: missing canonical center tie point in float_with_pairs_by_n")
-
-            m_nonneg = m - center_idx
-            if m_nonneg <= 0:
-                raise ValueError(f"n={n}: invalid center index {center_idx} for {m} tie rows")
-            forward_native: set[int] = set()
-            for t in range(EXPLORER5_CENTER_ARM_LENGTH):
-                ri = center_idx + t
-                if 0 <= t < m_nonneg and 0 <= ri < m:
-                    forward_native.add(t)
-
-            backward_native: set[int] = set()
-            tail_start = max(0, m_nonneg - EXPLORER5_TAIL_ARM_LENGTH)
-            for t in range(tail_start, m_nonneg):
-                ri = center_idx + t
-                if 0 <= ri < m:
-                    backward_native.add(t)
-
-            selected_native = sorted(forward_native | backward_native)
-            if not selected_native:
-                continue
-
-            ps: list[float] = []
-            iv: list[int | None] = []
-            jv: list[int | None] = []
-            lv: list[float | None] = []
-            rv: list[float | None] = []
-            ev_ns: list[float | None] = []
-            for t in selected_native:
-                rec_idx = center_idx + t
-                if not (0 <= rec_idx < m):
-                    continue
-                item = recs[rec_idx]
-                if not isinstance(item, (list, tuple)) or len(item) != 2:
-                    continue
-                _, pairs = item[0], item[1]
-                pf = float(item[0])
-                pi, pj = None, None
-                plist = pairs or []
-                if plist:
-                    first = plist[0]
-                    if isinstance(first, (list, tuple)) and len(first) == 2:
-                        pi, pj = int(first[0]), int(first[1])
-                sl: float | None = None
-                sr: float | None = None
-                evn: float | None = None
-                if rec_idx < len(slope_list) and isinstance(slope_list[rec_idx], dict):
-                    sd = slope_list[rec_idx]
-                    raw_sl = sd.get("slope_left")
-                    raw_sr = sd.get("slope_right")
-                    if raw_sl is not None and np.isfinite(float(raw_sl)):
-                        sl = float(raw_sl)
-                    if raw_sr is not None and np.isfinite(float(raw_sr)):
-                        sr = float(raw_sr)
-                    raw_es = sd.get("expected_sorted")
-                    if raw_es is not None and np.isfinite(float(raw_es)):
-                        evn = float(raw_es) / float(n)
-                ps.append(round(pf, 6))
-                iv.append(pi)
-                jv.append(pj)
-                lv.append(sl)
-                rv.append(sr)
-                ev_ns.append(evn)
-
-            dv: list[float | None] = []
-            ev: list[float | None] = []
-            for a, b in zip(lv, rv):
-                if a is not None and b is not None:
-                    dv.append(float(b - a))
-                    ev.append(float(a - b))
-                else:
-                    dv.append(None)
-                    ev.append(None)
-
-            out[str(n)] = {
-                "p": ps,
-                "i": iv,
-                "j": jv,
-                "l": lv,
-                "r": rv,
-                "d": dv,
-                "e": ev,
-                "ev_n": ev_ns,
-            }
+            row = _tie_explorer5_series_row_for_n(int(n), list(recs), list(slope_recs) if isinstance(slope_recs, list) else None)
+            if row is not None:
+                out[str(n)] = row
         finally:
             k = n - n_min + 1
             last_rows = len(out[str(n)]["p"]) if str(n) in out else 0
@@ -338,6 +346,58 @@ def tie_explorer5_series_by_n(
         elapsed = time.perf_counter() - t0
         print(
             f"[html] tie explorer embed: done stored_n={len(out)} in {elapsed:.2f}s",
+            file=sys.stderr,
+        )
+    return out
+
+
+def tie_explorer5_series_by_n_stream(
+    n_rows: Any,
+    n_min: int,
+    n_max: int,
+    *,
+    progress: bool = False,
+) -> dict[str, dict[str, Any]]:
+    """Per-n tie arrays for variants 5/6 from streamed per-n shard payloads."""
+    out: dict[str, dict[str, Any]] = {}
+    t0 = time.perf_counter()
+    total = max(0, int(n_max) - int(n_min) + 1)
+    if progress:
+        print(
+            f"[html] tie explorer embed(stream): n in [{n_min}, {n_max}]",
+            file=sys.stderr,
+        )
+
+    processed = 0
+    for n, payload_for_n in n_rows:
+        n_int = int(n)
+        if n_int < n_min or n_int > n_max:
+            continue
+        try:
+            recs = payload_for_n.get("float_with_pairs_by_n") if isinstance(payload_for_n, dict) else None
+            if not isinstance(recs, list) or not recs:
+                continue
+            slope_recs = payload_for_n.get("tie_slope_by_n") if isinstance(payload_for_n, dict) else None
+            row = _tie_explorer5_series_row_for_n(n_int, recs, slope_recs if isinstance(slope_recs, list) else None)
+            if row is not None:
+                out[str(n_int)] = row
+        finally:
+            processed += 1
+            _html_verbose_n_tick(
+                tag="tie explorer embed(stream)",
+                n=n_int,
+                n_min=n_min,
+                n_max=n_max,
+                step_index=processed,
+                t0=t0,
+                verbose=progress,
+                extra=f"stored_keys={len(out)} last_rows={len(out[str(n_int)]['p']) if str(n_int) in out else 0}",
+            )
+
+    if progress:
+        elapsed = time.perf_counter() - t0
+        print(
+            f"[html] tie explorer embed(stream): done stored_n={len(out)} processed={processed}/{total} in {elapsed:.2f}s",
             file=sys.stderr,
         )
     return out
