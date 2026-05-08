@@ -796,9 +796,10 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
         "n_min": 2,
         "n_max": 1000,
         "p_steps": DEFAULT_GRAPH_P_STEPS,
+        "p_min": 0.5,
+        "p_max": 0.6,
         "graph_manifest": None,
         "graph_shards_dir": None,
-        "vp_range": "full",
         "legend": False,
         "verbose": False,
         "width_in": 12.0,
@@ -810,7 +811,6 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
         "format": "png",
     }
 
-    parse_p_steps = _make_parse_p_steps(cfg)
     fields: list[tuple[str, str, callable, str]] = [
         (
             "output",
@@ -861,15 +861,21 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
         ),
         (
             "p_steps",
-            'p_steps ("1001"|"10001")',
-            parse_p_steps,
-            "Must match available graph manifests; controls p-grid density.",
+            "p_steps",
+            int,
+            "Number of p-grid points between p_min and p_max (integer >= 2).",
         ),
         (
-            "vp_range",
-            'vp_range ("full"|"left"|"right")',
-            _parse_vp_p_range,
-            "Heatmap p window: full=[0,1], left=[0,0.5], right=[0.5,1].",
+            "p_min",
+            "p_min",
+            float,
+            "Lower p bound for option 4 heatmap sampling grid.",
+        ),
+        (
+            "p_max",
+            "p_max",
+            float,
+            "Upper p bound for option 4 heatmap sampling grid (must be >= p_min).",
         ),
         ("width_in", "width (in)", float, "PNG width in inches."),
         ("height_in", "height (in)", float, "PNG height in inches."),
@@ -893,9 +899,10 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             "legend": "l",
             "n_max": "m",
             "n_min": "n",
-            "p_steps": "p",
-            "per_n_color_range": "r",
-            "vp_range": "s",
+            "p_min": "p",
+            "p_max": "r",
+            "p_steps": "s",
+            "per_n_color_range": "w",
             "trim_color_range_percent": "u",
             "verbose": "v",
             "width_in": "x",
@@ -943,19 +950,20 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             if int(cfg["n_min"]) > int(cfg["n_max"]):
                 print("n_min must be <= n_max.", file=sys.stderr)
                 continue
+            if int(cfg["p_steps"]) < 2:
+                print("p_steps must be >= 2.", file=sys.stderr)
+                continue
+            if float(cfg["p_min"]) > float(cfg["p_max"]):
+                print("p_min must be <= p_max.", file=sys.stderr)
+                continue
+            if float(cfg["p_min"]) < 0.0 or float(cfg["p_max"]) > 1.0:
+                print("p_min/p_max must be within [0, 1].", file=sys.stderr)
+                continue
             if float(cfg["width_in"]) <= 0.0 or float(cfg["height_in"]) <= 0.0:
                 print("width (in) and height (in) must be > 0.", file=sys.stderr)
                 continue
             if int(cfg["dpi"]) <= 0:
                 print("dpi must be > 0.", file=sys.stderr)
-                continue
-            valid_p_steps = _discover_available_graph_p_steps(cfg)
-            if int(cfg["p_steps"]) not in valid_p_steps:
-                shown = "|".join(str(x) for x in valid_p_steps)
-                print(
-                    f"p_steps must be one of ({shown}) based on available graph manifests.",
-                    file=sys.stderr,
-                )
                 continue
             cfg["pixel_mode"] = str(cfg["pixel_mode"]).lower()
             cfg["value"] = str(cfg["value"]).lower()
@@ -1206,7 +1214,8 @@ def _run_heatmap_export(args: argparse.Namespace) -> None:
         n_min=args.n_min,
         n_max=args.n_max,
         p_steps=args.p_steps,
-        vp_p_range=args.vp_range,
+        p_min=args.p_min,
+        p_max=args.p_max,
         value_key=args.value,
         colormap=args.colormap,
         show_legend=bool(getattr(args, "legend", False)),
@@ -1520,14 +1529,10 @@ def main() -> None:
     p_hm.add_argument("--n-min", type=int, default=2)
     p_hm.add_argument("--n-max", type=int, default=1000)
     p_hm.add_argument("--p-steps", type=int, default=DEFAULT_GRAPH_P_STEPS)
+    p_hm.add_argument("--p-min", type=float, default=0.5)
+    p_hm.add_argument("--p-max", type=float, default=0.6)
     p_hm.add_argument("--graph-manifest", default=None, help="Graph shard manifest path.")
     p_hm.add_argument("--graph-shards-dir", default=None)
-    p_hm.add_argument(
-        "--vp-range",
-        default="full",
-        choices=("full", "left", "right"),
-        help="p-axis viewport range for heatmap.",
-    )
     p_hm.add_argument(
         "--value",
         default="ev_n",

@@ -79,7 +79,8 @@ class HeatmapExportConfig:
     n_min: int = 2
     n_max: int = 1000
     p_steps: int = 1001
-    vp_p_range: str = "full"
+    p_min: float = 0.5
+    p_max: float = 0.6
     value_key: str = "ev_n"  # ev_n|eslope_n
     colormap: str = "viridis"
     show_legend: bool = False
@@ -257,6 +258,17 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     if cfg.p_steps < 2:
         print("ERROR: p_steps must be at least 2.", file=sys.stderr)
         sys.exit(1)
+    p_min = float(cfg.p_min)
+    p_max = float(cfg.p_max)
+    if not np.isfinite(p_min) or not np.isfinite(p_max):
+        print("ERROR: p_min and p_max must be finite.", file=sys.stderr)
+        sys.exit(1)
+    if p_min > p_max:
+        print("ERROR: p_min must be <= p_max.", file=sys.stderr)
+        sys.exit(1)
+    if p_min < 0.0 or p_max > 1.0:
+        print("ERROR: p_min/p_max must lie within [0, 1].", file=sys.stderr)
+        sys.exit(1)
     if float(cfg.width_in) <= 0.0 or float(cfg.height_in) <= 0.0:
         print("ERROR: width_in and height_in must be > 0.", file=sys.stderr)
         sys.exit(1)
@@ -288,31 +300,16 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
         sys.exit(1)
 
     p_steps = int(cfg.p_steps)
-    p_half_start = (p_steps - 1) // 2
-    vp = cfg.vp_p_range.strip().lower()
-    if vp == "full":
-        p_ix_lo, p_ix_hi = 0, p_steps - 1
-    elif vp == "left":
-        p_ix_lo, p_ix_hi = 0, p_half_start
-    elif vp == "right":
-        p_ix_lo, p_ix_hi = p_half_start, p_steps - 1
-    else:
-        print(
-            f'ERROR: vp_p_range must be "full", "left", or "right"; got {cfg.vp_p_range!r}.',
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    p_vals = np.linspace(0.0, 1.0, p_steps, dtype=float)
+    p_vals = np.linspace(p_min, p_max, p_steps, dtype=float)
     n_vals = list(range(cfg.n_min, cfg.n_max + 1))
-    x_vals = p_vals[p_ix_lo : p_ix_hi + 1]
+    x_vals = p_vals
     heat = np.full((len(n_vals), len(x_vals)), np.nan, dtype=float)
     total = len(n_vals)
 
     if val_key in GRAPH_HEATMAP_VALUE_CHOICES:
         if verbose:
             print(
-                f"[heatmap] source=graph_shards value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} vp={vp}",
+                f"[heatmap] source=graph_shards value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} p={p_min:.6f}..{p_max:.6f}",
                 file=sys.stderr,
             )
         from OBDsaveSourceData import (
@@ -323,12 +320,12 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
 
         manifest_path = _resolve_graph_manifest_path(
             cfg.graph_manifest,
-            cfg.p_steps,
+            None,
             cfg.graph_shards_dir or DEFAULT_GRAPH_SHARDS_DIR,
         )
         if not os.path.isfile(manifest_path):
             print(
-                f"ERROR: Graph shard manifest not found for p_steps={cfg.p_steps}: {os.path.abspath(manifest_path)}",
+                f"ERROR: Graph shard manifest not found: {os.path.abspath(manifest_path)}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -344,18 +341,10 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
                 file=sys.stderr,
             )
             sys.exit(1)
-        if int(manifest.get("p_steps", -1)) != int(cfg.p_steps):
-            print(
-                f"ERROR: manifest p_steps={manifest.get('p_steps')} != requested p_steps={cfg.p_steps}.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
         manifest_p_vals = np.asarray(manifest.get("p_values", []), dtype=float)
-        if manifest_p_vals.size != int(cfg.p_steps):
+        if manifest_p_vals.size < 2:
             print("ERROR: invalid p_values in graph manifest.", file=sys.stderr)
             sys.exit(1)
-        p_vals = manifest_p_vals
-        x_vals = p_vals[p_ix_lo : p_ix_hi + 1]
         n_entries = manifest.get("n_entries", {})
         if not isinstance(n_entries, dict):
             print("ERROR: invalid n_entries in graph manifest.", file=sys.stderr)
@@ -383,13 +372,14 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
 
             expected_sorted = np.asarray(shard["expected_sorted_by_p"], dtype=float)
             expected_sorted_slope = np.asarray(shard["expected_sorted_slope_by_p"], dtype=float)
-            if expected_sorted.size != p_steps or expected_sorted_slope.size != p_steps:
+            if expected_sorted.size != manifest_p_vals.size or expected_sorted_slope.size != manifest_p_vals.size:
                 continue
 
             if val_key == "ev_n":
-                row_vals = expected_sorted[p_ix_lo : p_ix_hi + 1] / float(n)
+                src_vals = expected_sorted / float(n)
             else:  # eslope_n
-                row_vals = expected_sorted_slope[p_ix_lo : p_ix_hi + 1] / float(n)
+                src_vals = expected_sorted_slope / float(n)
+            row_vals = np.interp(x_vals, manifest_p_vals, src_vals)
             heat[step_index - 1, :] = row_vals
 
             if cfg.progress_every and total:
@@ -403,7 +393,7 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     else:
         if verbose:
             print(
-                f"[heatmap] source=tie_shards_nearest_proxy value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} vp={vp}",
+                f"[heatmap] source=tie_shards_nearest_proxy value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} p={p_min:.6f}..{p_max:.6f}",
                 file=sys.stderr,
             )
         from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
@@ -504,7 +494,7 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
     trim_pct = int(cfg.trim_color_range_percent)
     trim_label = f"trim {trim_pct}-{100 - trim_pct}%" if trim_pct > 0 else "full range"
-    ax.set_title(f"N-p heatmap: {title_label} ({vp}; {range_label}; {trim_label})")
+    ax.set_title(f"N-p heatmap: {title_label} (p={p_min:.4f}..{p_max:.4f}; {range_label}; {trim_label})")
     if bool(cfg.show_legend):
         cbar = fig.colorbar(im, ax=ax)
         if bool(cfg.per_n_color_range):
