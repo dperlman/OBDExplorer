@@ -33,9 +33,11 @@ from obd_explorer.qt_graphics import PolyFillBatch, TieLineBatch, is_color_name,
 from obd_explorer.tie_data import resolve_tie_draw_entries
 
 
-HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
+HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n", "eslope_n")
 TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
 HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
+GRAPH_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
+TIE_PROXY_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e")
 
 
 @dataclass
@@ -225,8 +227,29 @@ def _canonical_center_index_for_recs(n: int, recs: list) -> int | None:
     return None
 
 
+def _nearest_values_by_p_grid(
+    p_source: np.ndarray,
+    v_source: np.ndarray,
+    p_target: np.ndarray,
+) -> np.ndarray:
+    """Nearest-neighbor sample ``v_source`` at each ``p_target`` using sorted ``p_source``."""
+    if p_source.size == 0 or v_source.size == 0 or p_target.size == 0:
+        return np.full(p_target.shape, np.nan, dtype=float)
+    order = np.argsort(p_source)
+    p_sorted = p_source[order]
+    v_sorted = v_source[order]
+    idx = np.searchsorted(p_sorted, p_target, side="left")
+    left = np.clip(idx - 1, 0, p_sorted.size - 1)
+    right = np.clip(idx, 0, p_sorted.size - 1)
+    dl = np.abs(p_target - p_sorted[left])
+    dr = np.abs(p_sorted[right] - p_target)
+    choose_right = dr < dl
+    picked = np.where(choose_right, right, left)
+    return v_sorted[picked].astype(float, copy=False)
+
+
 def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -> None:
-    """Export heatmap image: x=p (viewport range), y=n, color from graph shards."""
+    """Export heatmap image: x=p (viewport range), y=n, color from graph or tie-proxy data."""
     t0 = time.monotonic()
     if cfg.n_min > cfg.n_max:
         print("ERROR: n_min must be <= n_max.", file=sys.stderr)
@@ -264,50 +287,6 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
         )
         sys.exit(1)
 
-    from OBDsaveSourceData import (
-        DEFAULT_GRAPH_SHARDS_DIR,
-        _resolve_graph_manifest_path,
-        _resolve_manifest_shard_path,
-    )
-
-    manifest_path = _resolve_graph_manifest_path(
-        cfg.graph_manifest,
-        cfg.p_steps,
-        cfg.graph_shards_dir or DEFAULT_GRAPH_SHARDS_DIR,
-    )
-    if not os.path.isfile(manifest_path):
-        print(
-            f"ERROR: Graph shard manifest not found for p_steps={cfg.p_steps}: {os.path.abspath(manifest_path)}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    with open(manifest_path, "rb") as f:
-        manifest = pickle.load(f)
-    if not isinstance(manifest, dict):
-        print(f"ERROR: invalid graph shard manifest payload in {manifest_path!r}.", file=sys.stderr)
-        sys.exit(1)
-    if manifest.get("format") != "obd.graph_data.shards.v2":
-        print(
-            f"ERROR: unsupported graph shard manifest format {manifest.get('format')!r} in {manifest_path!r}.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if int(manifest.get("p_steps", -1)) != int(cfg.p_steps):
-        print(
-            f"ERROR: manifest p_steps={manifest.get('p_steps')} != requested p_steps={cfg.p_steps}.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    p_vals = np.asarray(manifest.get("p_values", []), dtype=float)
-    if p_vals.size != int(cfg.p_steps):
-        print("ERROR: invalid p_values in graph manifest.", file=sys.stderr)
-        sys.exit(1)
-    n_entries = manifest.get("n_entries", {})
-    if not isinstance(n_entries, dict):
-        print("ERROR: invalid n_entries in graph manifest.", file=sys.stderr)
-        sys.exit(1)
-
     p_steps = int(cfg.p_steps)
     p_half_start = (p_steps - 1) // 2
     vp = cfg.vp_p_range.strip().lower()
@@ -324,49 +303,159 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
         )
         sys.exit(1)
 
+    p_vals = np.linspace(0.0, 1.0, p_steps, dtype=float)
     n_vals = list(range(cfg.n_min, cfg.n_max + 1))
     x_vals = p_vals[p_ix_lo : p_ix_hi + 1]
     heat = np.full((len(n_vals), len(x_vals)), np.nan, dtype=float)
     total = len(n_vals)
-    for step_index, n in enumerate(n_vals, start=1):
-        entry = n_entries.get(str(int(n)))
-        if not isinstance(entry, dict):
-            continue
-        shard_ref = str(entry.get("shard_path", ""))
-        if not shard_ref:
-            continue
-        shard_path = _resolve_manifest_shard_path(manifest_path, shard_ref)
-        if not os.path.isfile(shard_path):
-            continue
 
-        with open(shard_path, "rb") as f:
-            shard = pickle.load(f)
-        if not isinstance(shard, dict):
-            continue
-        if shard.get("format") != "obd.graph_data.n_shard.v2":
-            continue
-        if "expected_sorted_by_p" not in shard or "expected_sorted_slope_by_p" not in shard:
-            continue
+    if val_key in GRAPH_HEATMAP_VALUE_CHOICES:
+        if verbose:
+            print(
+                f"[heatmap] source=graph_shards value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} vp={vp}",
+                file=sys.stderr,
+            )
+        from OBDsaveSourceData import (
+            DEFAULT_GRAPH_SHARDS_DIR,
+            _resolve_graph_manifest_path,
+            _resolve_manifest_shard_path,
+        )
 
-        expected_sorted = np.asarray(shard["expected_sorted_by_p"], dtype=float)
-        expected_sorted_slope = np.asarray(shard["expected_sorted_slope_by_p"], dtype=float)
-        if expected_sorted.size != p_steps or expected_sorted_slope.size != p_steps:
-            continue
+        manifest_path = _resolve_graph_manifest_path(
+            cfg.graph_manifest,
+            cfg.p_steps,
+            cfg.graph_shards_dir or DEFAULT_GRAPH_SHARDS_DIR,
+        )
+        if not os.path.isfile(manifest_path):
+            print(
+                f"ERROR: Graph shard manifest not found for p_steps={cfg.p_steps}: {os.path.abspath(manifest_path)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-        if val_key == "ev_n":
-            row_vals = expected_sorted[p_ix_lo : p_ix_hi + 1] / float(n)
-        else:  # eslope_n
-            row_vals = expected_sorted_slope[p_ix_lo : p_ix_hi + 1] / float(n)
-        heat[step_index - 1, :] = row_vals
+        with open(manifest_path, "rb") as f:
+            manifest = pickle.load(f)
+        if not isinstance(manifest, dict):
+            print(f"ERROR: invalid graph shard manifest payload in {manifest_path!r}.", file=sys.stderr)
+            sys.exit(1)
+        if manifest.get("format") != "obd.graph_data.shards.v2":
+            print(
+                f"ERROR: unsupported graph shard manifest format {manifest.get('format')!r} in {manifest_path!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if int(manifest.get("p_steps", -1)) != int(cfg.p_steps):
+            print(
+                f"ERROR: manifest p_steps={manifest.get('p_steps')} != requested p_steps={cfg.p_steps}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        manifest_p_vals = np.asarray(manifest.get("p_values", []), dtype=float)
+        if manifest_p_vals.size != int(cfg.p_steps):
+            print("ERROR: invalid p_values in graph manifest.", file=sys.stderr)
+            sys.exit(1)
+        p_vals = manifest_p_vals
+        x_vals = p_vals[p_ix_lo : p_ix_hi + 1]
+        n_entries = manifest.get("n_entries", {})
+        if not isinstance(n_entries, dict):
+            print("ERROR: invalid n_entries in graph manifest.", file=sys.stderr)
+            sys.exit(1)
 
-        if cfg.progress_every and total:
-            pe = int(cfg.progress_every)
-            if step_index % pe == 0 or step_index == total:
-                elapsed = time.monotonic() - t0
-                print(
-                    f"[heatmap] graph shards: n={n} step {step_index}/{total} elapsed {elapsed:.2f}s",
-                    file=sys.stderr,
+        for step_index, n in enumerate(n_vals, start=1):
+            entry = n_entries.get(str(int(n)))
+            if not isinstance(entry, dict):
+                continue
+            shard_ref = str(entry.get("shard_path", ""))
+            if not shard_ref:
+                continue
+            shard_path = _resolve_manifest_shard_path(manifest_path, shard_ref)
+            if not os.path.isfile(shard_path):
+                continue
+
+            with open(shard_path, "rb") as f:
+                shard = pickle.load(f)
+            if not isinstance(shard, dict):
+                continue
+            if shard.get("format") != "obd.graph_data.n_shard.v2":
+                continue
+            if "expected_sorted_by_p" not in shard or "expected_sorted_slope_by_p" not in shard:
+                continue
+
+            expected_sorted = np.asarray(shard["expected_sorted_by_p"], dtype=float)
+            expected_sorted_slope = np.asarray(shard["expected_sorted_slope_by_p"], dtype=float)
+            if expected_sorted.size != p_steps or expected_sorted_slope.size != p_steps:
+                continue
+
+            if val_key == "ev_n":
+                row_vals = expected_sorted[p_ix_lo : p_ix_hi + 1] / float(n)
+            else:  # eslope_n
+                row_vals = expected_sorted_slope[p_ix_lo : p_ix_hi + 1] / float(n)
+            heat[step_index - 1, :] = row_vals
+
+            if cfg.progress_every and total:
+                pe = int(cfg.progress_every)
+                if step_index % pe == 0 or step_index == total:
+                    elapsed = time.monotonic() - t0
+                    print(
+                        f"[heatmap] graph shards: n={n} step {step_index}/{total} elapsed {elapsed:.2f}s",
+                        file=sys.stderr,
+                    )
+    else:
+        if verbose:
+            print(
+                f"[heatmap] source=tie_shards_nearest_proxy value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} vp={vp}",
+                file=sys.stderr,
+            )
+        from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
+
+        need_slopes = val_key in ("l", "r", "d", "e")
+        n_rows = iter_tie_points_from_shards(
+            path=DEFAULT_TIE_OUTPUT,
+            n_list=n_vals,
+            require_all=False,
+            progress=cfg.progress_every,
+            include_float_by_n=False,
+            include_float_with_pairs_by_n=True,
+            include_tie_slope_by_n=need_slopes,
+        )
+        row_by_n = {n: i for i, n in enumerate(n_vals)}
+        for n, payload_for_n in n_rows:
+            rr = row_by_n.get(int(n))
+            if rr is None:
+                continue
+            recs = payload_for_n.get("float_with_pairs_by_n") if isinstance(payload_for_n, dict) else None
+            if not isinstance(recs, list) or not recs:
+                continue
+            slope_list = payload_for_n.get("tie_slope_by_n") if isinstance(payload_for_n, dict) else None
+            slope_recs = list(slope_list) if isinstance(slope_list, list) else []
+
+            p_list: list[float] = []
+            v_list: list[float] = []
+            for rec_idx, rec in enumerate(recs):
+                if not isinstance(rec, (list, tuple)) or len(rec) != 2:
+                    continue
+                p_val = float(rec[0])
+                if not np.isfinite(p_val):
+                    continue
+                slope_rec = slope_recs[rec_idx] if rec_idx < len(slope_recs) and isinstance(slope_recs[rec_idx], dict) else None
+                v = _tie_heatmap_value_at_record(
+                    n=int(n),
+                    rec=rec,
+                    slope_rec=slope_rec,
+                    value_key=val_key,
                 )
+                if not np.isfinite(v):
+                    continue
+                p_list.append(p_val)
+                v_list.append(float(v))
+            if not p_list:
+                continue
+            row_vals = _nearest_values_by_p_grid(
+                np.asarray(p_list, dtype=float),
+                np.asarray(v_list, dtype=float),
+                x_vals,
+            )
+            heat[rr, :] = row_vals
 
     import matplotlib.pyplot as plt
     from matplotlib import colors
@@ -402,7 +491,16 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     )
     ax.set_xlabel("p")
     ax.set_ylabel("n")
-    title_label = "E_sorted/n" if val_key == "ev_n" else "(d/dp E_sorted)/n"
+    if val_key == "ev_n":
+        title_label = "E_sorted/n"
+    elif val_key == "eslope_n":
+        title_label = "(d/dp E_sorted)/n"
+    elif val_key == "d":
+        title_label = "d (r-l) via nearest tie"
+    elif val_key == "e":
+        title_label = "e (l-r) via nearest tie"
+    else:
+        title_label = f"{val_key} via nearest tie"
     range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
     trim_pct = int(cfg.trim_color_range_percent)
     trim_label = f"trim {trim_pct}-{100 - trim_pct}%" if trim_pct > 0 else "full range"
