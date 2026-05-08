@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pickle
 import sys
 import time
 from dataclasses import dataclass
@@ -30,6 +31,11 @@ from obd_explorer.model import TieColorSpec
 from obd_explorer.numeric import interpolate_y_at_p, subtract_endpoint_chord
 from obd_explorer.qt_graphics import PolyFillBatch, TieLineBatch, is_color_name, tie_rgba_for_color_key
 from obd_explorer.tie_data import resolve_tie_draw_entries
+
+
+HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
+TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
+
 
 @dataclass
 class HeadlessExportConfig:
@@ -63,6 +69,443 @@ class HeadlessExportConfig:
     output_path: str = "OBDGraphWithTiePyQTGraph.png"
     export_format: str = "png"  # png | pdf | svg
     export_backend: str = "pyqtgraph"  # pyqtgraph | matplotlib
+
+
+@dataclass
+class HeatmapExportConfig:
+    n_min: int = 2
+    n_max: int = 1000
+    p_steps: int = 1001
+    vp_p_range: str = "full"
+    value_key: str = "ev_n"  # ev_n|eslope_n
+    colormap: str = "viridis"
+    show_legend: bool = False
+    width_in: float = 12.0
+    height_in: float = 8.0
+    dpi: int = 400
+    graph_manifest: str | None = None
+    graph_shards_dir: str | None = None
+    output_path: str = "OBDHeatmap.png"
+    export_format: str = "png"  # png only
+    export_backend: str = "pyqtgraph"  # accepted for menu parity; rendering uses matplotlib
+    progress_every: int | None = None
+    trim_color_range: bool = True
+    per_n_color_range: bool = True
+
+
+@dataclass
+class TieHeatmapExportConfig:
+    n_min: int = 2
+    n_max: int = 1000
+    value_key: str = "d"  # i|j|l|r|d|e|ev_n
+    colormap: str = "viridis"
+    show_legend: bool = False
+    load_from: str = "l"  # l: center-out, r: end-in
+    width_in: float = 12.0
+    height_in: float = 8.0
+    dpi: int = 400
+    tie_manifest: str | None = None
+    output_path: str = "OBDTieHeatmap.png"
+    export_format: str = "png"  # png only
+    export_backend: str = "pyqtgraph"  # accepted for menu parity; rendering uses matplotlib
+    progress_every: int | None = None
+    trim_color_range: bool = True
+    per_n_color_range: bool = True
+
+
+def _compute_color_range(values: np.ndarray, *, trim_color_range: bool) -> tuple[float, float] | None:
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return None
+    if trim_color_range:
+        lo = float(np.percentile(finite, 1.0))
+        hi = float(np.percentile(finite, 99.0))
+    else:
+        lo = float(np.min(finite))
+        hi = float(np.max(finite))
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return None
+    return lo, hi
+
+
+def _normalize_heat_for_render(
+    heat: np.ndarray,
+    *,
+    trim_color_range: bool,
+    per_n_color_range: bool,
+) -> tuple[np.ndarray, float | None, float | None]:
+    if per_n_color_range:
+        out = np.full_like(heat, np.nan, dtype=float)
+        for row_i in range(heat.shape[0]):
+            row = np.asarray(heat[row_i, :], dtype=float)
+            rg = _compute_color_range(row, trim_color_range=trim_color_range)
+            if rg is None:
+                continue
+            lo, hi = rg
+            mask = np.isfinite(row)
+            if not np.any(mask):
+                continue
+            if hi <= lo:
+                out[row_i, mask] = 0.5
+            else:
+                out[row_i, mask] = (row[mask] - lo) / (hi - lo)
+        return out, 0.0, 1.0
+
+    rg = _compute_color_range(heat, trim_color_range=trim_color_range)
+    if rg is None:
+        return np.asarray(heat, dtype=float), None, None
+    lo, hi = rg
+    if hi <= lo:
+        hi = lo + 1.0e-12
+    return np.asarray(heat, dtype=float), lo, hi
+
+
+def _tie_heatmap_value_at_record(
+    *,
+    n: int,
+    rec: tuple,
+    slope_rec: dict | None,
+    value_key: str,
+) -> float:
+    pairs = rec[1] if isinstance(rec, (list, tuple)) and len(rec) >= 2 else None
+    i_val: float = float("nan")
+    j_val: float = float("nan")
+    if pairs:
+        first = pairs[0]
+        if isinstance(first, (list, tuple)) and len(first) == 2:
+            i_val = float(first[0])
+            j_val = float(first[1])
+
+    sl: float = float("nan")
+    sr: float = float("nan")
+    evn: float = float("nan")
+    if isinstance(slope_rec, dict):
+        raw_sl = slope_rec.get("slope_left")
+        raw_sr = slope_rec.get("slope_right")
+        raw_es = slope_rec.get("expected_sorted")
+        if raw_sl is not None and np.isfinite(float(raw_sl)):
+            sl = float(raw_sl)
+        if raw_sr is not None and np.isfinite(float(raw_sr)):
+            sr = float(raw_sr)
+        if raw_es is not None and np.isfinite(float(raw_es)) and n > 0:
+            evn = float(raw_es) / float(n)
+
+    if value_key == "i":
+        return i_val
+    if value_key == "j":
+        return j_val
+    if value_key == "l":
+        return sl
+    if value_key == "r":
+        return sr
+    if value_key == "d":
+        return (sr - sl) if np.isfinite(sr) and np.isfinite(sl) else float("nan")
+    if value_key == "e":
+        return (sl - sr) if np.isfinite(sr) and np.isfinite(sl) else float("nan")
+    if value_key == "ev_n":
+        return evn
+    raise ValueError(f"Unsupported tie heatmap value key: {value_key!r}")
+
+
+def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -> None:
+    """Export heatmap image: x=p (viewport range), y=n, color from graph shards."""
+    t0 = time.monotonic()
+    if cfg.n_min > cfg.n_max:
+        print("ERROR: n_min must be <= n_max.", file=sys.stderr)
+        sys.exit(1)
+    if cfg.p_steps < 2:
+        print("ERROR: p_steps must be at least 2.", file=sys.stderr)
+        sys.exit(1)
+    if float(cfg.width_in) <= 0.0 or float(cfg.height_in) <= 0.0:
+        print("ERROR: width_in and height_in must be > 0.", file=sys.stderr)
+        sys.exit(1)
+    if int(cfg.dpi) <= 0:
+        print("ERROR: dpi must be > 0.", file=sys.stderr)
+        sys.exit(1)
+
+    fmt = cfg.export_format.strip().lower()
+    if fmt != "png":
+        print("ERROR: heatmap export_format must be png.", file=sys.stderr)
+        sys.exit(1)
+    val_key = str(cfg.value_key).strip().lower()
+    if val_key not in HEATMAP_VALUE_CHOICES:
+        print(
+            "ERROR: heatmap value_key must be one of "
+            + ", ".join(HEATMAP_VALUE_CHOICES)
+            + f"; got {cfg.value_key!r}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    from OBDsaveSourceData import (
+        DEFAULT_GRAPH_SHARDS_DIR,
+        _resolve_graph_manifest_path,
+        _resolve_manifest_shard_path,
+    )
+
+    manifest_path = _resolve_graph_manifest_path(
+        cfg.graph_manifest,
+        cfg.p_steps,
+        cfg.graph_shards_dir or DEFAULT_GRAPH_SHARDS_DIR,
+    )
+    if not os.path.isfile(manifest_path):
+        print(
+            f"ERROR: Graph shard manifest not found for p_steps={cfg.p_steps}: {os.path.abspath(manifest_path)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    with open(manifest_path, "rb") as f:
+        manifest = pickle.load(f)
+    if not isinstance(manifest, dict):
+        print(f"ERROR: invalid graph shard manifest payload in {manifest_path!r}.", file=sys.stderr)
+        sys.exit(1)
+    if manifest.get("format") != "obd.graph_data.shards.v2":
+        print(
+            f"ERROR: unsupported graph shard manifest format {manifest.get('format')!r} in {manifest_path!r}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if int(manifest.get("p_steps", -1)) != int(cfg.p_steps):
+        print(
+            f"ERROR: manifest p_steps={manifest.get('p_steps')} != requested p_steps={cfg.p_steps}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    p_vals = np.asarray(manifest.get("p_values", []), dtype=float)
+    if p_vals.size != int(cfg.p_steps):
+        print("ERROR: invalid p_values in graph manifest.", file=sys.stderr)
+        sys.exit(1)
+    n_entries = manifest.get("n_entries", {})
+    if not isinstance(n_entries, dict):
+        print("ERROR: invalid n_entries in graph manifest.", file=sys.stderr)
+        sys.exit(1)
+
+    p_steps = int(cfg.p_steps)
+    p_half_start = (p_steps - 1) // 2
+    vp = cfg.vp_p_range.strip().lower()
+    if vp == "full":
+        p_ix_lo, p_ix_hi = 0, p_steps - 1
+    elif vp == "left":
+        p_ix_lo, p_ix_hi = 0, p_half_start
+    elif vp == "right":
+        p_ix_lo, p_ix_hi = p_half_start, p_steps - 1
+    else:
+        print(
+            f'ERROR: vp_p_range must be "full", "left", or "right"; got {cfg.vp_p_range!r}.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    n_vals = list(range(cfg.n_min, cfg.n_max + 1))
+    x_vals = p_vals[p_ix_lo : p_ix_hi + 1]
+    heat = np.full((len(n_vals), len(x_vals)), np.nan, dtype=float)
+    total = len(n_vals)
+    for step_index, n in enumerate(n_vals, start=1):
+        entry = n_entries.get(str(int(n)))
+        if not isinstance(entry, dict):
+            continue
+        shard_ref = str(entry.get("shard_path", ""))
+        if not shard_ref:
+            continue
+        shard_path = _resolve_manifest_shard_path(manifest_path, shard_ref)
+        if not os.path.isfile(shard_path):
+            continue
+
+        with open(shard_path, "rb") as f:
+            shard = pickle.load(f)
+        if not isinstance(shard, dict):
+            continue
+        if shard.get("format") != "obd.graph_data.n_shard.v2":
+            continue
+        if "expected_sorted_by_p" not in shard or "expected_sorted_slope_by_p" not in shard:
+            continue
+
+        expected_sorted = np.asarray(shard["expected_sorted_by_p"], dtype=float)
+        expected_sorted_slope = np.asarray(shard["expected_sorted_slope_by_p"], dtype=float)
+        if expected_sorted.size != p_steps or expected_sorted_slope.size != p_steps:
+            continue
+
+        if val_key == "ev_n":
+            row_vals = expected_sorted[p_ix_lo : p_ix_hi + 1] / float(n)
+        else:  # eslope_n
+            row_vals = expected_sorted_slope[p_ix_lo : p_ix_hi + 1] / float(n)
+        heat[step_index - 1, :] = row_vals
+
+        if cfg.progress_every and total:
+            pe = int(cfg.progress_every)
+            if step_index % pe == 0 or step_index == total:
+                elapsed = time.monotonic() - t0
+                print(
+                    f"[heatmap] graph shards: n={n} step {step_index}/{total} elapsed {elapsed:.2f}s",
+                    file=sys.stderr,
+                )
+
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(float(cfg.width_in), float(cfg.height_in)), dpi=int(cfg.dpi))
+    plot_data, vmin, vmax = _normalize_heat_for_render(
+        heat,
+        trim_color_range=bool(cfg.trim_color_range),
+        per_n_color_range=bool(cfg.per_n_color_range),
+    )
+    masked = np.ma.masked_invalid(plot_data)
+    cmap = plt.get_cmap(cfg.colormap).copy()
+    cmap.set_bad((1.0, 1.0, 1.0, 0.0))
+    im = ax.imshow(
+        masked,
+        origin="lower",
+        aspect="auto",
+        interpolation="nearest",
+        extent=[float(x_vals[0]), float(x_vals[-1]), float(cfg.n_min), float(cfg.n_max)],
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+    )
+    ax.set_xlabel("p")
+    ax.set_ylabel("n")
+    title_label = "E_sorted/n" if val_key == "ev_n" else "(d/dp E_sorted)/n"
+    range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
+    trim_label = "trim 1-99%" if bool(cfg.trim_color_range) else "full range"
+    ax.set_title(f"N-p heatmap: {title_label} ({vp}; {range_label}; {trim_label})")
+    if bool(cfg.show_legend):
+        cbar = fig.colorbar(im, ax=ax)
+        if bool(cfg.per_n_color_range):
+            cbar.set_label(f"{title_label} (row-normalized)")
+        else:
+            cbar.set_label(title_label)
+    fig.tight_layout()
+    fig.savefig(cfg.output_path, format="png")
+    plt.close(fig)
+
+    if verbose:
+        print(f"Wrote {os.path.abspath(cfg.output_path)} (PNG).")
+        print(f"Export time: {time.monotonic() - t0:.2f}s")
+
+
+def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = True) -> None:
+    """Export N-tie heatmap: x=tie index position, y=n, color=tie-derived scalar."""
+    t0 = time.monotonic()
+    if cfg.n_min > cfg.n_max:
+        print("ERROR: n_min must be <= n_max.", file=sys.stderr)
+        sys.exit(1)
+    if float(cfg.width_in) <= 0.0 or float(cfg.height_in) <= 0.0:
+        print("ERROR: width_in and height_in must be > 0.", file=sys.stderr)
+        sys.exit(1)
+    if int(cfg.dpi) <= 0:
+        print("ERROR: dpi must be > 0.", file=sys.stderr)
+        sys.exit(1)
+
+    fmt = cfg.export_format.strip().lower()
+    if fmt != "png":
+        print("ERROR: tie heatmap export_format must be png.", file=sys.stderr)
+        sys.exit(1)
+    value_key = str(cfg.value_key).strip().lower()
+    if value_key not in TIE_HEATMAP_VALUE_CHOICES:
+        print(
+            "ERROR: tie heatmap value_key must be one of "
+            + ", ".join(TIE_HEATMAP_VALUE_CHOICES)
+            + f"; got {cfg.value_key!r}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    load_from = str(cfg.load_from).strip().lower()
+    if load_from not in ("l", "r"):
+        print('ERROR: load_from must be "l" or "r".', file=sys.stderr)
+        sys.exit(1)
+
+    from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
+
+    n_vals = list(range(cfg.n_min, cfg.n_max + 1))
+    row_by_n = {n: i for i, n in enumerate(n_vals)}
+    max_ties = 1000
+    heat = np.full((len(n_vals), max_ties), np.nan, dtype=float)
+
+    tie_manifest = cfg.tie_manifest or DEFAULT_TIE_OUTPUT
+    if not os.path.isfile(tie_manifest):
+        print(f"ERROR: tie shard manifest not found: {os.path.abspath(tie_manifest)}", file=sys.stderr)
+        sys.exit(1)
+    n_rows = iter_tie_points_from_shards(
+        path=tie_manifest,
+        n_list=n_vals,
+        require_all=False,
+        progress=cfg.progress_every,
+        include_float_by_n=False,
+        include_float_with_pairs_by_n=True,
+        include_tie_slope_by_n=True,
+    )
+    for n, payload_for_n in n_rows:
+        if n not in row_by_n:
+            continue
+        recs = payload_for_n.get("float_with_pairs_by_n")
+        if not isinstance(recs, list) or not recs:
+            continue
+        slope_list = payload_for_n.get("tie_slope_by_n")
+        slope_recs = list(slope_list) if isinstance(slope_list, list) else []
+
+        rr = row_by_n[n]
+        n_take = min(max_ties, len(recs))
+        for pos in range(n_take):
+            rec_idx = pos if load_from == "l" else (len(recs) - 1 - pos)
+            rec = recs[rec_idx]
+            slope_rec = slope_recs[rec_idx] if rec_idx < len(slope_recs) else None
+            heat[rr, pos] = _tie_heatmap_value_at_record(
+                n=n,
+                rec=rec,
+                slope_rec=slope_rec if isinstance(slope_rec, dict) else None,
+                value_key=value_key,
+            )
+
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(float(cfg.width_in), float(cfg.height_in)), dpi=int(cfg.dpi))
+    plot_data, vmin, vmax = _normalize_heat_for_render(
+        heat,
+        trim_color_range=bool(cfg.trim_color_range),
+        per_n_color_range=bool(cfg.per_n_color_range),
+    )
+    masked = np.ma.masked_invalid(plot_data)
+    cmap = plt.get_cmap(cfg.colormap).copy()
+    cmap.set_bad((1.0, 1.0, 1.0, 0.0))
+
+    if load_from == "l":
+        x_lo, x_hi = 0.0, float(max_ties - 1)
+        x_label = "tie # from center (0 = center)"
+    else:
+        x_lo, x_hi = 1.0, float(max_ties)
+        x_label = "tie # from end (1 = last)"
+
+    im = ax.imshow(
+        masked,
+        origin="lower",
+        aspect="auto",
+        interpolation="nearest",
+        extent=[x_lo, x_hi, float(cfg.n_min), float(cfg.n_max)],
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+    )
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("n")
+    range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
+    trim_label = "trim 1-99%" if bool(cfg.trim_color_range) else "full range"
+    ax.set_title(
+        f"N-tie heatmap: {value_key} ({'left' if load_from == 'l' else 'right'} load; {range_label}; {trim_label})"
+    )
+    if bool(cfg.show_legend):
+        cbar = fig.colorbar(im, ax=ax)
+        if bool(cfg.per_n_color_range):
+            cbar.set_label(f"{value_key} (row-normalized)")
+        else:
+            cbar.set_label(value_key)
+    fig.tight_layout()
+    fig.savefig(cfg.output_path, format="png")
+    plt.close(fig)
+
+    if verbose:
+        print(f"Wrote {os.path.abspath(cfg.output_path)} (PNG).")
+        print(f"Export time: {time.monotonic() - t0:.2f}s")
 
 
 def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) -> None:
