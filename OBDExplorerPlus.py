@@ -62,6 +62,10 @@ HTML_COLOR_SCALE_CHOICES: tuple[str, ...] = (
     "gist_ncar",
 )
 
+HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
+TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
+HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
+
 
 def _effective_default_graph_shards_dir() -> str:
     return os.path.join("data", "graph_data_shards")
@@ -201,6 +205,47 @@ def _parse_html_colorscale(text: str) -> str:
     return _parse_choice(text, HTML_COLOR_SCALE_CHOICES, field="colorscale")
 
 
+def _parse_heatmap_value(text: str) -> str:
+    return _parse_choice(text, HEATMAP_VALUE_CHOICES, field="heatmap_value").lower()
+
+
+def _parse_tie_heatmap_value(text: str) -> str:
+    return _parse_choice(text, TIE_HEATMAP_VALUE_CHOICES, field="tie_heatmap_value").lower()
+
+
+def _parse_tie_load_from(text: str) -> str:
+    return _parse_choice(text, ("l", "r"), field="load_ties_from").lower()
+
+
+def _parse_trim_color_range_percent(text: str) -> int:
+    try:
+        val = int(str(text).strip())
+    except ValueError as e:
+        raise ValueError("trim color range percent must be an integer.") from e
+    if val < 0 or val > 40:
+        raise ValueError("trim color range percent must be in [0, 40].")
+    return val
+
+
+def _parse_heatmap_pixel_mode(text: str) -> str:
+    return _parse_choice(text, HEATMAP_PIXEL_MODE_CHOICES, field="exact_pixel_heatmap").lower()
+
+
+def _parse_mpl_colormap_name(text: str) -> str:
+    raw = text.strip()
+    if not raw:
+        raise ValueError("colormap cannot be empty.")
+    from matplotlib import colormaps
+
+    if raw in colormaps:
+        return raw
+    lowered = raw.lower()
+    for name in colormaps:
+        if name.lower() == lowered:
+            return name
+    raise ValueError(f"Unknown matplotlib colormap: {raw!r}.")
+
+
 def _parse_fill_from(text: str) -> str:
     return _parse_choice(text, ("left", "right"), field="fill_from")
 
@@ -258,6 +303,8 @@ def _interactive_html_pick_variant() -> int | None:
     print("  q) Cancel")
     while True:
         raw = input("Variant [1–6 or q]: ").strip().lower()
+        if raw == "":
+            continue
         if raw in ("q", "quit"):
             print("Cancelled.")
             return None
@@ -380,6 +427,8 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
         print("  h) Help")
         print("  q) Cancel")
         cmd = input("Choose key to edit, or g/h/hx/q: ").strip().lower()
+        if cmd == "":
+            continue
         if cmd == "q":
             print("Cancelled.")
             return None
@@ -553,7 +602,7 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
         "tie_line_px": 1.0,
         "graph_line_px": 0.1,
         "width_in": 12.0,
-        "height_in": 8.0,
+        "height_in": 10.0,
         "dpi": 400,
         "graph_manifest": None,
         "graph_shards_dir": None,
@@ -674,6 +723,8 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
         print("  h) Help")
         print("  q) Cancel")
         cmd = input("Choose key to edit, or g/h/hx/q: ").strip().lower()
+        if cmd == "":
+            continue
         if cmd == "q":
             print("Cancelled.")
             return None
@@ -721,6 +772,356 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
                 continue
             cfg["format"] = str(cfg["format"]).lower()
             cfg["backend"] = str(cfg["backend"]).lower()
+            return argparse.Namespace(**cfg)
+        field = keymap.get(cmd)
+        if field is None:
+            print("Unknown option.", file=sys.stderr)
+            continue
+        key, label, parser, _ = field
+        cur = _render_setting_value(key, cfg[key], cfg)
+        raw = input(f"Set {label} [{cur!r}]: ").strip()
+        if raw == "":
+            continue
+        try:
+            cfg[key] = parser(raw)
+        except ValueError as e:
+            print(f"Invalid value: {e}", file=sys.stderr)
+
+
+def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
+    cfg: dict[str, object] = {
+        "output": os.path.join("plots", "OBDHeatmap"),
+        "pixel_mode": "annotated",
+        "dpi": 400,
+        "n_min": 2,
+        "n_max": 1000,
+        "p_steps": DEFAULT_GRAPH_P_STEPS,
+        "graph_manifest": None,
+        "graph_shards_dir": None,
+        "vp_range": "full",
+        "legend": False,
+        "verbose": False,
+        "width_in": 12.0,
+        "height_in": 10.0,
+        "colormap": "viridis",
+        "value": "ev_n",
+        "trim_color_range_percent": 1,
+        "per_n_color_range": False,
+        "format": "png",
+    }
+
+    parse_p_steps = _make_parse_p_steps(cfg)
+    fields: list[tuple[str, str, callable, str]] = [
+        (
+            "output",
+            "output file path",
+            str,
+            "Base path without extension (.png appended automatically).",
+        ),
+        (
+            "pixel_mode",
+            f'exact pixel heatmap ({"/".join(HEATMAP_PIXEL_MODE_CHOICES)})',
+            _parse_heatmap_pixel_mode,
+            "exact = raw raster export (1:1 data cell to output pixel), annotated = plotted figure with labels/colorbar and not guaranteed 1:1 cell-to-pixel.",
+        ),
+        (
+            "colormap",
+            "colormap",
+            _parse_mpl_colormap_name,
+            "Matplotlib colormap name used for heatmap colors.",
+        ),
+        ("dpi", "dpi", int, "Export dots-per-inch (png)."),
+        ("graph_manifest", "graph_manifest (or none)", _parse_opt_str, "Path to graph shard manifest; none uses default manifest for p_steps."),
+        ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory containing graph shard files/manifests."),
+        ("legend", 'legend ("yes"|"no")', _parse_bool, "Show heatmap color legend (colorbar)."),
+        (
+            "trim_color_range_percent",
+            "trim color range percent (0..40)",
+            _parse_trim_color_range_percent,
+            "Trim this percent from both low/high tails for color scaling (0 = no trimming).",
+        ),
+        (
+            "per_n_color_range",
+            'per-N color range ("yes"|"no")',
+            _parse_bool,
+            "When yes, compute color scaling per N row; when no, use one global range.",
+        ),
+        ("verbose", 'verbose ("yes"|"no")', _parse_bool, "Print graph-shard load progress every 10 shards during heatmap export."),
+        (
+            "n_max",
+            "n_max",
+            int,
+            "Upper n bound. Must satisfy n_min <= n_max and be covered by graph shards.",
+        ),
+        (
+            "n_min",
+            "n_min",
+            int,
+            "Lower n bound. Smallest allowed is 2.",
+        ),
+        (
+            "p_steps",
+            'p_steps ("1001"|"10001")',
+            parse_p_steps,
+            "Must match available graph manifests; controls p-grid density.",
+        ),
+        (
+            "vp_range",
+            'vp_range ("full"|"left"|"right")',
+            _parse_vp_p_range,
+            "Heatmap p window: full=[0,1], left=[0,0.5], right=[0.5,1].",
+        ),
+        ("width_in", "width (in)", float, "PNG width in inches."),
+        ("height_in", "height (in)", float, "PNG height in inches."),
+        (
+            "value",
+            f'value ({"/".join(HEATMAP_VALUE_CHOICES)})',
+            _parse_heatmap_value,
+            'Heatmap value: "ev_n" = expected_sorted / n, "eslope_n" = expected_sorted_slope / n.',
+        ),
+    ]
+
+    keymap = _build_menu_keymap(
+        fields,
+        key_by_field={
+            "output": "a",
+            "pixel_mode": "b",
+            "colormap": "c",
+            "dpi": "d",
+            "graph_manifest": "i",
+            "graph_shards_dir": "j",
+            "legend": "l",
+            "n_max": "m",
+            "n_min": "n",
+            "p_steps": "p",
+            "per_n_color_range": "r",
+            "vp_range": "s",
+            "trim_color_range_percent": "u",
+            "verbose": "v",
+            "width_in": "x",
+            "height_in": "y",
+            "value": "z",
+        },
+    )
+    if not keymap:
+        return None
+
+    while True:
+        print("\nHeatmap export settings:")
+        print("Hint: enter a key to edit, 'h' for help, 'ha' for help on key a, 'g' to export.")
+        for letter, (key, label, _, _) in keymap.items():
+            shown = _render_setting_value(key, cfg[key], cfg)
+            print(f"  {letter}) {label}: {shown!r}")
+        print("  g) Proceed with export")
+        print("  h) Help")
+        print("  q) Cancel")
+        cmd = input("Choose key to edit, or g/h/hx/q: ").strip().lower()
+        if cmd == "":
+            continue
+        if cmd == "q":
+            print("Cancelled.")
+            return None
+        if cmd == "h":
+            print(
+                "Help:\n"
+                "  - Type a setting key to edit its value.\n"
+                "  - Type h<key> for detailed help about that setting (example: ha).\n"
+                "  - Type g to proceed with export.\n"
+                "  - Type q to cancel.\n"
+            )
+            continue
+        if cmd.startswith("h") and len(cmd) == 2:
+            key = cmd[1]
+            field = keymap.get(key)
+            if field is None:
+                print(f"Unknown help key: {key}", file=sys.stderr)
+                continue
+            _, label, _, detail = field
+            print(f"{key}) {label}\n    {detail}\n")
+            continue
+        if cmd == "g":
+            if int(cfg["n_min"]) > int(cfg["n_max"]):
+                print("n_min must be <= n_max.", file=sys.stderr)
+                continue
+            if float(cfg["width_in"]) <= 0.0 or float(cfg["height_in"]) <= 0.0:
+                print("width (in) and height (in) must be > 0.", file=sys.stderr)
+                continue
+            if int(cfg["dpi"]) <= 0:
+                print("dpi must be > 0.", file=sys.stderr)
+                continue
+            valid_p_steps = _discover_available_graph_p_steps(cfg)
+            if int(cfg["p_steps"]) not in valid_p_steps:
+                shown = "|".join(str(x) for x in valid_p_steps)
+                print(
+                    f"p_steps must be one of ({shown}) based on available graph manifests.",
+                    file=sys.stderr,
+                )
+                continue
+            cfg["pixel_mode"] = str(cfg["pixel_mode"]).lower()
+            cfg["value"] = str(cfg["value"]).lower()
+            cfg["format"] = "png"
+            return argparse.Namespace(**cfg)
+        field = keymap.get(cmd)
+        if field is None:
+            print("Unknown option.", file=sys.stderr)
+            continue
+        key, label, parser, _ = field
+        cur = _render_setting_value(key, cfg[key], cfg)
+        raw = input(f"Set {label} [{cur!r}]: ").strip()
+        if raw == "":
+            continue
+        try:
+            cfg[key] = parser(raw)
+        except ValueError as e:
+            print(f"Invalid value: {e}", file=sys.stderr)
+
+
+def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
+    cfg: dict[str, object] = {
+        "output": os.path.join("plots", "OBDTieHeatmap"),
+        "pixel_mode": "annotated",
+        "dpi": 400,
+        "n_min": 2,
+        "n_max": 1000,
+        "legend": False,
+        "verbose": False,
+        "width_in": 12.0,
+        "height_in": 10.0,
+        "colormap": "viridis",
+        "value": "d",
+        "load_from": "l",
+        "trim_color_range_percent": 1,
+        "per_n_color_range": False,
+        "tie_manifest": None,
+        "format": "png",
+    }
+    fields: list[tuple[str, str, callable, str]] = [
+        (
+            "output",
+            "output file path",
+            str,
+            "Base path without extension (.png appended automatically).",
+        ),
+        (
+            "pixel_mode",
+            f'exact pixel heatmap ({"/".join(HEATMAP_PIXEL_MODE_CHOICES)})',
+            _parse_heatmap_pixel_mode,
+            "exact = raw raster export (1:1 data cell to output pixel), annotated = plotted figure with labels/colorbar and not guaranteed 1:1 cell-to-pixel.",
+        ),
+        (
+            "colormap",
+            "colormap",
+            _parse_mpl_colormap_name,
+            "Matplotlib colormap name used for heatmap colors.",
+        ),
+        ("dpi", "dpi", int, "Export dots-per-inch (png)."),
+        ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to tie shard manifest."),
+        ("legend", 'legend ("yes"|"no")', _parse_bool, "Show heatmap color legend (colorbar)."),
+        (
+            "trim_color_range_percent",
+            "trim color range percent (0..40)",
+            _parse_trim_color_range_percent,
+            "Trim this percent from both low/high tails for color scaling (0 = no trimming).",
+        ),
+        (
+            "per_n_color_range",
+            'per-N color range ("yes"|"no")',
+            _parse_bool,
+            "When yes, compute color scaling per N row; when no, use one global range.",
+        ),
+        ("verbose", 'verbose ("yes"|"no")', _parse_bool, "Print tie-shard load progress every 10 shards during heatmap export."),
+        (
+            "n_max",
+            "n_max",
+            int,
+            "Upper n bound. Must satisfy n_min <= n_max and be covered by tie shards.",
+        ),
+        (
+            "n_min",
+            "n_min",
+            int,
+            "Lower n bound. Smallest allowed is 2.",
+        ),
+        ("load_from", 'load ties from ("l"|"r")', _parse_tie_load_from, 'l = center-out, r = end-in (last tie first).'),
+        ("width_in", "width (in)", float, "PNG width in inches."),
+        ("height_in", "height (in)", float, "PNG height in inches."),
+        (
+            "value",
+            f'value ({"/".join(TIE_HEATMAP_VALUE_CHOICES)})',
+            _parse_tie_heatmap_value,
+            "Tie value used for color (same set as HTML variants 5/6 except p).",
+        ),
+    ]
+    keymap = _build_menu_keymap(
+        fields,
+        key_by_field={
+            "output": "a",
+            "pixel_mode": "b",
+            "colormap": "c",
+            "dpi": "d",
+            "tie_manifest": "i",
+            "legend": "l",
+            "n_max": "m",
+            "n_min": "n",
+            "per_n_color_range": "r",
+            "load_from": "t",
+            "trim_color_range_percent": "u",
+            "verbose": "v",
+            "width_in": "x",
+            "height_in": "y",
+            "value": "z",
+        },
+    )
+    if not keymap:
+        return None
+
+    while True:
+        print("\nN-tie heatmap settings:")
+        print("Hint: enter a key to edit, 'h' for help, 'ha' for help on key a, 'g' to export.")
+        for letter, (key, label, _, _) in keymap.items():
+            shown = _render_setting_value(key, cfg[key], cfg)
+            print(f"  {letter}) {label}: {shown!r}")
+        print("  g) Proceed with export")
+        print("  h) Help")
+        print("  q) Cancel")
+        cmd = input("Choose key to edit, or g/h/hx/q: ").strip().lower()
+        if cmd == "":
+            continue
+        if cmd == "q":
+            print("Cancelled.")
+            return None
+        if cmd == "h":
+            print(
+                "Help:\n"
+                "  - Type a setting key to edit its value.\n"
+                "  - Type h<key> for detailed help about that setting (example: ha).\n"
+                "  - Type g to proceed with export.\n"
+                "  - Type q to cancel.\n"
+            )
+            continue
+        if cmd.startswith("h") and len(cmd) == 2:
+            key = cmd[1]
+            field = keymap.get(key)
+            if field is None:
+                print(f"Unknown help key: {key}", file=sys.stderr)
+                continue
+            _, label, _, detail = field
+            print(f"{key}) {label}\n    {detail}\n")
+            continue
+        if cmd == "g":
+            if int(cfg["n_min"]) > int(cfg["n_max"]):
+                print("n_min must be <= n_max.", file=sys.stderr)
+                continue
+            if float(cfg["width_in"]) <= 0.0 or float(cfg["height_in"]) <= 0.0:
+                print("width (in) and height (in) must be > 0.", file=sys.stderr)
+                continue
+            if int(cfg["dpi"]) <= 0:
+                print("dpi must be > 0.", file=sys.stderr)
+                continue
+            cfg["pixel_mode"] = str(cfg["pixel_mode"]).lower()
+            cfg["value"] = str(cfg["value"]).lower()
+            cfg["load_from"] = str(cfg["load_from"]).lower()
+            cfg["format"] = "png"
             return argparse.Namespace(**cfg)
         field = keymap.get(cmd)
         if field is None:
@@ -795,6 +1196,60 @@ def _run_export(args: argparse.Namespace) -> None:
     )
     _ensure_output_parent_dir(cfg.output_path)
     export_graph_headless(cfg, verbose=True)
+
+
+def _run_heatmap_export(args: argparse.Namespace) -> None:
+    from obd_explorer.render_headless import HeatmapExportConfig, export_heatmap_headless
+
+    out_path = _resolved_export_output_path(args.output, "png")
+    cfg = HeatmapExportConfig(
+        n_min=args.n_min,
+        n_max=args.n_max,
+        p_steps=args.p_steps,
+        vp_p_range=args.vp_range,
+        value_key=args.value,
+        colormap=args.colormap,
+        show_legend=bool(getattr(args, "legend", False)),
+        width_in=args.width_in,
+        height_in=args.height_in,
+        dpi=args.dpi,
+        graph_manifest=args.graph_manifest,
+        graph_shards_dir=args.graph_shards_dir,
+        output_path=out_path,
+        export_format="png",
+        pixel_mode=args.pixel_mode,
+        progress_every=(10 if bool(getattr(args, "verbose", False)) else None),
+        trim_color_range_percent=int(getattr(args, "trim_color_range_percent", 1)),
+        per_n_color_range=bool(getattr(args, "per_n_color_range", False)),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_heatmap_headless(cfg, verbose=True)
+
+
+def _run_tie_heatmap_export(args: argparse.Namespace) -> None:
+    from obd_explorer.render_headless import TieHeatmapExportConfig, export_tie_heatmap_headless
+
+    out_path = _resolved_export_output_path(args.output, "png")
+    cfg = TieHeatmapExportConfig(
+        n_min=args.n_min,
+        n_max=args.n_max,
+        value_key=args.value,
+        colormap=args.colormap,
+        show_legend=bool(getattr(args, "legend", False)),
+        load_from=args.load_from,
+        width_in=args.width_in,
+        height_in=args.height_in,
+        dpi=args.dpi,
+        tie_manifest=args.tie_manifest,
+        output_path=out_path,
+        export_format="png",
+        pixel_mode=args.pixel_mode,
+        progress_every=(10 if bool(getattr(args, "verbose", False)) else None),
+        trim_color_range_percent=int(getattr(args, "trim_color_range_percent", 1)),
+        per_n_color_range=bool(getattr(args, "per_n_color_range", False)),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_tie_heatmap_headless(cfg, verbose=True)
 
 
 def _run_html(args: argparse.Namespace) -> None:
@@ -912,10 +1367,14 @@ def _interactive() -> None:
             "  1  Launch Qt GUI\n"
             "  2  HTML explorer\n"
             "  3  Export graph (interactive settings)\n"
+            "  4  N-p heatmaps (interactive settings)\n"
+            "  5  N-tie heatmaps (interactive settings)\n"
             "  q  Quit\n"
         )
-        choice = input("Enter choice [1–3 or q]: ").strip().lower()
-        if choice in ("q", "quit", ""):
+        choice = input("Enter choice [1–5 or q]: ").strip().lower()
+        if choice == "":
+            continue
+        if choice in ("q", "quit"):
             return
         if choice == "1":
             _run_gui()
@@ -931,6 +1390,18 @@ def _interactive() -> None:
             if ns is None:
                 return
             _run_export(ns)
+            return
+        if choice == "4":
+            ns = _interactive_heatmap_export_settings()
+            if ns is None:
+                return
+            _run_heatmap_export(ns)
+            return
+        if choice == "5":
+            ns = _interactive_tie_heatmap_export_settings()
+            if ns is None:
+                return
+            _run_tie_heatmap_export(ns)
             return
         print("Unknown choice.", file=sys.stderr)
 
@@ -1037,6 +1508,130 @@ def main() -> None:
     p_exp.add_argument("--height-in", type=float, default=8.0)
     p_exp.add_argument("--dpi", type=int, default=400)
 
+    p_hm = sub.add_parser("heatmap", help="N-p heatmap export (graph shards, PNG).")
+    p_hm.add_argument("-o", "--output", required=True)
+    p_hm.add_argument("--format", choices=("png",), default="png")
+    p_hm.add_argument(
+        "--pixel-mode",
+        choices=HEATMAP_PIXEL_MODE_CHOICES,
+        default="annotated",
+        help='Exact pixel heatmap mode: "exact" (raw raster) or "annotated" (axes/title/colorbar).',
+    )
+    p_hm.add_argument("--n-min", type=int, default=2)
+    p_hm.add_argument("--n-max", type=int, default=1000)
+    p_hm.add_argument("--p-steps", type=int, default=DEFAULT_GRAPH_P_STEPS)
+    p_hm.add_argument("--graph-manifest", default=None, help="Graph shard manifest path.")
+    p_hm.add_argument("--graph-shards-dir", default=None)
+    p_hm.add_argument(
+        "--vp-range",
+        default="full",
+        choices=("full", "left", "right"),
+        help="p-axis viewport range for heatmap.",
+    )
+    p_hm.add_argument(
+        "--value",
+        default="ev_n",
+        choices=HEATMAP_VALUE_CHOICES,
+        help='Heatmap value: "ev_n" (expected_sorted/n) or "eslope_n" (expected_sorted_slope/n).',
+    )
+    p_hm.add_argument(
+        "--colormap",
+        default="viridis",
+        help="Matplotlib colormap name for heatmap colors.",
+    )
+    p_hm.add_argument("--legend", action="store_true", default=False, help="Show heatmap colorbar.")
+    p_hm.add_argument(
+        "--trim-color-range-percent",
+        type=int,
+        default=1,
+        choices=range(0, 41),
+        metavar="0..40",
+        help="Trim this percent from both tails for color range (0 disables trimming; default: 1).",
+    )
+    p_hm.add_argument(
+        "--per-n-color-range",
+        action="store_true",
+        dest="per_n_color_range",
+        default=False,
+        help="Use row-wise (per-N) color scaling (default: off).",
+    )
+    p_hm.add_argument(
+        "--no-per-n-color-range",
+        action="store_false",
+        dest="per_n_color_range",
+        help="Use one global color range across the whole heatmap (default).",
+    )
+    p_hm.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Print progress every 10 loaded graph shards.",
+    )
+    p_hm.add_argument("--width-in", type=float, default=12.0)
+    p_hm.add_argument("--height-in", type=float, default=10.0)
+    p_hm.add_argument("--dpi", type=int, default=400)
+
+    p_thm = sub.add_parser("tie-heatmap", help="N-tie heatmap export (iterative tie shards, PNG).")
+    p_thm.add_argument("-o", "--output", required=True)
+    p_thm.add_argument("--format", choices=("png",), default="png")
+    p_thm.add_argument(
+        "--pixel-mode",
+        choices=HEATMAP_PIXEL_MODE_CHOICES,
+        default="annotated",
+        help='Exact pixel heatmap mode: "exact" (raw raster) or "annotated" (axes/title/colorbar).',
+    )
+    p_thm.add_argument("--n-min", type=int, default=2)
+    p_thm.add_argument("--n-max", type=int, default=1000)
+    p_thm.add_argument("--tie-manifest", default=None, help="Tie shard manifest path.")
+    p_thm.add_argument(
+        "--value",
+        default="d",
+        choices=TIE_HEATMAP_VALUE_CHOICES,
+        help='Tie heatmap value key: i, j, l, r, d, e, or ev_n.',
+    )
+    p_thm.add_argument(
+        "--load-from",
+        default="l",
+        choices=("l", "r"),
+        help='Tie loading direction: "l" center-out, "r" end-in (last tie first).',
+    )
+    p_thm.add_argument(
+        "--colormap",
+        default="viridis",
+        help="Matplotlib colormap name for heatmap colors.",
+    )
+    p_thm.add_argument("--legend", action="store_true", default=False, help="Show heatmap colorbar.")
+    p_thm.add_argument(
+        "--trim-color-range-percent",
+        type=int,
+        default=1,
+        choices=range(0, 41),
+        metavar="0..40",
+        help="Trim this percent from both tails for color range (0 disables trimming; default: 1).",
+    )
+    p_thm.add_argument(
+        "--per-n-color-range",
+        action="store_true",
+        dest="per_n_color_range",
+        default=False,
+        help="Use row-wise (per-N) color scaling (default: off).",
+    )
+    p_thm.add_argument(
+        "--no-per-n-color-range",
+        action="store_false",
+        dest="per_n_color_range",
+        help="Use one global color range across the whole heatmap (default).",
+    )
+    p_thm.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Print progress every 10 loaded tie shards.",
+    )
+    p_thm.add_argument("--width-in", type=float, default=12.0)
+    p_thm.add_argument("--height-in", type=float, default=10.0)
+    p_thm.add_argument("--dpi", type=int, default=400)
+
     args = parser.parse_args()
     if args.cmd is None:
         _interactive()
@@ -1047,6 +1642,10 @@ def main() -> None:
         _run_html(args)
     elif args.cmd == "export":
         _run_export(args)
+    elif args.cmd == "heatmap":
+        _run_heatmap_export(args)
+    elif args.cmd == "tie-heatmap":
+        _run_tie_heatmap_export(args)
 
 
 if __name__ == "__main__":
