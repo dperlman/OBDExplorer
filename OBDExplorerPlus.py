@@ -64,6 +64,7 @@ HTML_COLOR_SCALE_CHOICES: tuple[str, ...] = (
 
 HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
 TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
+HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
 
 
 def _effective_default_graph_shards_dir() -> str:
@@ -214,6 +215,20 @@ def _parse_tie_heatmap_value(text: str) -> str:
 
 def _parse_tie_load_from(text: str) -> str:
     return _parse_choice(text, ("l", "r"), field="load_ties_from").lower()
+
+
+def _parse_trim_color_range_percent(text: str) -> int:
+    try:
+        val = int(str(text).strip())
+    except ValueError as e:
+        raise ValueError("trim color range percent must be an integer.") from e
+    if val < 0 or val > 40:
+        raise ValueError("trim color range percent must be in [0, 40].")
+    return val
+
+
+def _parse_heatmap_pixel_mode(text: str) -> str:
+    return _parse_choice(text, HEATMAP_PIXEL_MODE_CHOICES, field="exact_pixel_heatmap").lower()
 
 
 def _parse_mpl_colormap_name(text: str) -> str:
@@ -587,7 +602,7 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
         "tie_line_px": 1.0,
         "graph_line_px": 0.1,
         "width_in": 12.0,
-        "height_in": 8.0,
+        "height_in": 10.0,
         "dpi": 400,
         "graph_manifest": None,
         "graph_shards_dir": None,
@@ -776,7 +791,7 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
 def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
     cfg: dict[str, object] = {
         "output": os.path.join("plots", "OBDHeatmap"),
-        "backend": "pyqtgraph",
+        "pixel_mode": "annotated",
         "dpi": 400,
         "n_min": 2,
         "n_max": 1000,
@@ -787,11 +802,11 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
         "legend": False,
         "verbose": False,
         "width_in": 12.0,
-        "height_in": 8.0,
+        "height_in": 10.0,
         "colormap": "viridis",
         "value": "ev_n",
-        "trim_color_range": True,
-        "per_n_color_range": True,
+        "trim_color_range_percent": 1,
+        "per_n_color_range": False,
         "format": "png",
     }
 
@@ -804,10 +819,10 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             "Base path without extension (.png appended automatically).",
         ),
         (
-            "backend",
-            'backend ("pyqtgraph"|"matplotlib")',
-            _parse_export_backend,
-            "Retained for consistency with export graph settings.",
+            "pixel_mode",
+            f'exact pixel heatmap ({"/".join(HEATMAP_PIXEL_MODE_CHOICES)})',
+            _parse_heatmap_pixel_mode,
+            "exact = raw raster export (1:1 data cell to output pixel), annotated = plotted figure with labels/colorbar and not guaranteed 1:1 cell-to-pixel.",
         ),
         (
             "colormap",
@@ -820,10 +835,10 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
         ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory containing graph shard files/manifests."),
         ("legend", 'legend ("yes"|"no")', _parse_bool, "Show heatmap color legend (colorbar)."),
         (
-            "trim_color_range",
-            'trim color range ("yes"|"no")',
-            _parse_bool,
-            "When yes, color range drops lowest/highest 1% of values before scaling.",
+            "trim_color_range_percent",
+            "trim color range percent (0..40)",
+            _parse_trim_color_range_percent,
+            "Trim this percent from both low/high tails for color scaling (0 = no trimming).",
         ),
         (
             "per_n_color_range",
@@ -870,7 +885,7 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
         fields,
         key_by_field={
             "output": "a",
-            "backend": "b",
+            "pixel_mode": "b",
             "colormap": "c",
             "dpi": "d",
             "graph_manifest": "i",
@@ -881,7 +896,7 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             "p_steps": "p",
             "per_n_color_range": "r",
             "vp_range": "s",
-            "trim_color_range": "u",
+            "trim_color_range_percent": "u",
             "verbose": "v",
             "width_in": "x",
             "height_in": "y",
@@ -942,7 +957,7 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
                     file=sys.stderr,
                 )
                 continue
-            cfg["backend"] = str(cfg["backend"]).lower()
+            cfg["pixel_mode"] = str(cfg["pixel_mode"]).lower()
             cfg["value"] = str(cfg["value"]).lower()
             cfg["format"] = "png"
             return argparse.Namespace(**cfg)
@@ -964,19 +979,19 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
 def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
     cfg: dict[str, object] = {
         "output": os.path.join("plots", "OBDTieHeatmap"),
-        "backend": "pyqtgraph",
+        "pixel_mode": "annotated",
         "dpi": 400,
         "n_min": 2,
         "n_max": 1000,
         "legend": False,
         "verbose": False,
         "width_in": 12.0,
-        "height_in": 8.0,
+        "height_in": 10.0,
         "colormap": "viridis",
         "value": "d",
         "load_from": "l",
-        "trim_color_range": True,
-        "per_n_color_range": True,
+        "trim_color_range_percent": 1,
+        "per_n_color_range": False,
         "tie_manifest": None,
         "format": "png",
     }
@@ -988,10 +1003,10 @@ def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
             "Base path without extension (.png appended automatically).",
         ),
         (
-            "backend",
-            'backend ("pyqtgraph"|"matplotlib")',
-            _parse_export_backend,
-            "Retained for consistency with export graph settings.",
+            "pixel_mode",
+            f'exact pixel heatmap ({"/".join(HEATMAP_PIXEL_MODE_CHOICES)})',
+            _parse_heatmap_pixel_mode,
+            "exact = raw raster export (1:1 data cell to output pixel), annotated = plotted figure with labels/colorbar and not guaranteed 1:1 cell-to-pixel.",
         ),
         (
             "colormap",
@@ -1003,10 +1018,10 @@ def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
         ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to tie shard manifest."),
         ("legend", 'legend ("yes"|"no")', _parse_bool, "Show heatmap color legend (colorbar)."),
         (
-            "trim_color_range",
-            'trim color range ("yes"|"no")',
-            _parse_bool,
-            "When yes, color range drops lowest/highest 1% of values before scaling.",
+            "trim_color_range_percent",
+            "trim color range percent (0..40)",
+            _parse_trim_color_range_percent,
+            "Trim this percent from both low/high tails for color scaling (0 = no trimming).",
         ),
         (
             "per_n_color_range",
@@ -1041,7 +1056,7 @@ def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
         fields,
         key_by_field={
             "output": "a",
-            "backend": "b",
+            "pixel_mode": "b",
             "colormap": "c",
             "dpi": "d",
             "tie_manifest": "i",
@@ -1050,7 +1065,7 @@ def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
             "n_min": "n",
             "per_n_color_range": "r",
             "load_from": "t",
-            "trim_color_range": "u",
+            "trim_color_range_percent": "u",
             "verbose": "v",
             "width_in": "x",
             "height_in": "y",
@@ -1103,7 +1118,7 @@ def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
             if int(cfg["dpi"]) <= 0:
                 print("dpi must be > 0.", file=sys.stderr)
                 continue
-            cfg["backend"] = str(cfg["backend"]).lower()
+            cfg["pixel_mode"] = str(cfg["pixel_mode"]).lower()
             cfg["value"] = str(cfg["value"]).lower()
             cfg["load_from"] = str(cfg["load_from"]).lower()
             cfg["format"] = "png"
@@ -1202,10 +1217,10 @@ def _run_heatmap_export(args: argparse.Namespace) -> None:
         graph_shards_dir=args.graph_shards_dir,
         output_path=out_path,
         export_format="png",
-        export_backend=args.backend,
+        pixel_mode=args.pixel_mode,
         progress_every=(10 if bool(getattr(args, "verbose", False)) else None),
-        trim_color_range=bool(getattr(args, "trim_color_range", True)),
-        per_n_color_range=bool(getattr(args, "per_n_color_range", True)),
+        trim_color_range_percent=int(getattr(args, "trim_color_range_percent", 1)),
+        per_n_color_range=bool(getattr(args, "per_n_color_range", False)),
     )
     _ensure_output_parent_dir(cfg.output_path)
     export_heatmap_headless(cfg, verbose=True)
@@ -1228,10 +1243,10 @@ def _run_tie_heatmap_export(args: argparse.Namespace) -> None:
         tie_manifest=args.tie_manifest,
         output_path=out_path,
         export_format="png",
-        export_backend=args.backend,
+        pixel_mode=args.pixel_mode,
         progress_every=(10 if bool(getattr(args, "verbose", False)) else None),
-        trim_color_range=bool(getattr(args, "trim_color_range", True)),
-        per_n_color_range=bool(getattr(args, "per_n_color_range", True)),
+        trim_color_range_percent=int(getattr(args, "trim_color_range_percent", 1)),
+        per_n_color_range=bool(getattr(args, "per_n_color_range", False)),
     )
     _ensure_output_parent_dir(cfg.output_path)
     export_tie_heatmap_headless(cfg, verbose=True)
@@ -1496,7 +1511,12 @@ def main() -> None:
     p_hm = sub.add_parser("heatmap", help="N-p heatmap export (graph shards, PNG).")
     p_hm.add_argument("-o", "--output", required=True)
     p_hm.add_argument("--format", choices=("png",), default="png")
-    p_hm.add_argument("--backend", choices=("pyqtgraph", "matplotlib"), default="pyqtgraph")
+    p_hm.add_argument(
+        "--pixel-mode",
+        choices=HEATMAP_PIXEL_MODE_CHOICES,
+        default="annotated",
+        help='Exact pixel heatmap mode: "exact" (raw raster) or "annotated" (axes/title/colorbar).',
+    )
     p_hm.add_argument("--n-min", type=int, default=2)
     p_hm.add_argument("--n-max", type=int, default=1000)
     p_hm.add_argument("--p-steps", type=int, default=DEFAULT_GRAPH_P_STEPS)
@@ -1521,30 +1541,25 @@ def main() -> None:
     )
     p_hm.add_argument("--legend", action="store_true", default=False, help="Show heatmap colorbar.")
     p_hm.add_argument(
-        "--trim-color-range",
-        action="store_true",
-        dest="trim_color_range",
-        default=True,
-        help="Drop lowest/highest 1%% when determining color range (default: on).",
-    )
-    p_hm.add_argument(
-        "--no-trim-color-range",
-        action="store_false",
-        dest="trim_color_range",
-        help="Use full min/max for color range (no percentile trimming).",
+        "--trim-color-range-percent",
+        type=int,
+        default=1,
+        choices=range(0, 41),
+        metavar="0..40",
+        help="Trim this percent from both tails for color range (0 disables trimming; default: 1).",
     )
     p_hm.add_argument(
         "--per-n-color-range",
         action="store_true",
         dest="per_n_color_range",
-        default=True,
-        help="Use row-wise (per-N) color scaling (default: on).",
+        default=False,
+        help="Use row-wise (per-N) color scaling (default: off).",
     )
     p_hm.add_argument(
         "--no-per-n-color-range",
         action="store_false",
         dest="per_n_color_range",
-        help="Use one global color range across the whole heatmap.",
+        help="Use one global color range across the whole heatmap (default).",
     )
     p_hm.add_argument(
         "--verbose",
@@ -1553,13 +1568,18 @@ def main() -> None:
         help="Print progress every 10 loaded graph shards.",
     )
     p_hm.add_argument("--width-in", type=float, default=12.0)
-    p_hm.add_argument("--height-in", type=float, default=8.0)
+    p_hm.add_argument("--height-in", type=float, default=10.0)
     p_hm.add_argument("--dpi", type=int, default=400)
 
     p_thm = sub.add_parser("tie-heatmap", help="N-tie heatmap export (iterative tie shards, PNG).")
     p_thm.add_argument("-o", "--output", required=True)
     p_thm.add_argument("--format", choices=("png",), default="png")
-    p_thm.add_argument("--backend", choices=("pyqtgraph", "matplotlib"), default="pyqtgraph")
+    p_thm.add_argument(
+        "--pixel-mode",
+        choices=HEATMAP_PIXEL_MODE_CHOICES,
+        default="annotated",
+        help='Exact pixel heatmap mode: "exact" (raw raster) or "annotated" (axes/title/colorbar).',
+    )
     p_thm.add_argument("--n-min", type=int, default=2)
     p_thm.add_argument("--n-max", type=int, default=1000)
     p_thm.add_argument("--tie-manifest", default=None, help="Tie shard manifest path.")
@@ -1582,30 +1602,25 @@ def main() -> None:
     )
     p_thm.add_argument("--legend", action="store_true", default=False, help="Show heatmap colorbar.")
     p_thm.add_argument(
-        "--trim-color-range",
-        action="store_true",
-        dest="trim_color_range",
-        default=True,
-        help="Drop lowest/highest 1%% when determining color range (default: on).",
-    )
-    p_thm.add_argument(
-        "--no-trim-color-range",
-        action="store_false",
-        dest="trim_color_range",
-        help="Use full min/max for color range (no percentile trimming).",
+        "--trim-color-range-percent",
+        type=int,
+        default=1,
+        choices=range(0, 41),
+        metavar="0..40",
+        help="Trim this percent from both tails for color range (0 disables trimming; default: 1).",
     )
     p_thm.add_argument(
         "--per-n-color-range",
         action="store_true",
         dest="per_n_color_range",
-        default=True,
-        help="Use row-wise (per-N) color scaling (default: on).",
+        default=False,
+        help="Use row-wise (per-N) color scaling (default: off).",
     )
     p_thm.add_argument(
         "--no-per-n-color-range",
         action="store_false",
         dest="per_n_color_range",
-        help="Use one global color range across the whole heatmap.",
+        help="Use one global color range across the whole heatmap (default).",
     )
     p_thm.add_argument(
         "--verbose",
@@ -1614,7 +1629,7 @@ def main() -> None:
         help="Print progress every 10 loaded tie shards.",
     )
     p_thm.add_argument("--width-in", type=float, default=12.0)
-    p_thm.add_argument("--height-in", type=float, default=8.0)
+    p_thm.add_argument("--height-in", type=float, default=10.0)
     p_thm.add_argument("--dpi", type=int, default=400)
 
     args = parser.parse_args()

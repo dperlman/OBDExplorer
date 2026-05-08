@@ -35,6 +35,7 @@ from obd_explorer.tie_data import resolve_tie_draw_entries
 
 HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
 TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
+HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
 
 
 @dataclass
@@ -81,16 +82,16 @@ class HeatmapExportConfig:
     colormap: str = "viridis"
     show_legend: bool = False
     width_in: float = 12.0
-    height_in: float = 8.0
+    height_in: float = 10.0
     dpi: int = 400
     graph_manifest: str | None = None
     graph_shards_dir: str | None = None
     output_path: str = "OBDHeatmap.png"
     export_format: str = "png"  # png only
-    export_backend: str = "pyqtgraph"  # accepted for menu parity; rendering uses matplotlib
+    pixel_mode: str = "annotated"  # exact | annotated
     progress_every: int | None = None
-    trim_color_range: bool = True
-    per_n_color_range: bool = True
+    trim_color_range_percent: int = 1
+    per_n_color_range: bool = False
 
 
 @dataclass
@@ -102,25 +103,28 @@ class TieHeatmapExportConfig:
     show_legend: bool = False
     load_from: str = "l"  # l: center-out, r: end-in
     width_in: float = 12.0
-    height_in: float = 8.0
+    height_in: float = 10.0
     dpi: int = 400
     tie_manifest: str | None = None
     output_path: str = "OBDTieHeatmap.png"
     export_format: str = "png"  # png only
-    export_backend: str = "pyqtgraph"  # accepted for menu parity; rendering uses matplotlib
+    pixel_mode: str = "annotated"  # exact | annotated
     progress_every: int | None = None
-    trim_color_range: bool = True
-    per_n_color_range: bool = True
+    trim_color_range_percent: int = 1
+    per_n_color_range: bool = False
 
 
-def _compute_color_range(values: np.ndarray, *, trim_color_range: bool) -> tuple[float, float] | None:
+def _compute_color_range(values: np.ndarray, *, trim_color_range_percent: int) -> tuple[float, float] | None:
     finite = np.asarray(values, dtype=float)
     finite = finite[np.isfinite(finite)]
     if finite.size == 0:
         return None
-    if trim_color_range:
-        lo = float(np.percentile(finite, 1.0))
-        hi = float(np.percentile(finite, 99.0))
+    pct = int(trim_color_range_percent)
+    if pct < 0 or pct > 40:
+        raise ValueError(f"trim_color_range_percent must be in [0, 40], got {trim_color_range_percent!r}.")
+    if pct > 0:
+        lo = float(np.percentile(finite, float(pct)))
+        hi = float(np.percentile(finite, float(100 - pct)))
     else:
         lo = float(np.min(finite))
         hi = float(np.max(finite))
@@ -132,14 +136,14 @@ def _compute_color_range(values: np.ndarray, *, trim_color_range: bool) -> tuple
 def _normalize_heat_for_render(
     heat: np.ndarray,
     *,
-    trim_color_range: bool,
+    trim_color_range_percent: int,
     per_n_color_range: bool,
 ) -> tuple[np.ndarray, float | None, float | None]:
     if per_n_color_range:
         out = np.full_like(heat, np.nan, dtype=float)
         for row_i in range(heat.shape[0]):
             row = np.asarray(heat[row_i, :], dtype=float)
-            rg = _compute_color_range(row, trim_color_range=trim_color_range)
+            rg = _compute_color_range(row, trim_color_range_percent=trim_color_range_percent)
             if rg is None:
                 continue
             lo, hi = rg
@@ -152,7 +156,7 @@ def _normalize_heat_for_render(
                 out[row_i, mask] = (row[mask] - lo) / (hi - lo)
         return out, 0.0, 1.0
 
-    rg = _compute_color_range(heat, trim_color_range=trim_color_range)
+    rg = _compute_color_range(heat, trim_color_range_percent=trim_color_range_percent)
     if rg is None:
         return np.asarray(heat, dtype=float), None, None
     lo, hi = rg
@@ -208,6 +212,19 @@ def _tie_heatmap_value_at_record(
     raise ValueError(f"Unsupported tie heatmap value key: {value_key!r}")
 
 
+def _canonical_center_index_for_recs(n: int, recs: list) -> int | None:
+    from OBDsaveSourceData import _is_canonical_center_tie
+
+    for rec_idx, item in enumerate(recs):
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        pairs = item[1]
+        plist = list(pairs) if pairs else []
+        if _is_canonical_center_tie(int(n), plist):
+            return rec_idx
+    return None
+
+
 def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -> None:
     """Export heatmap image: x=p (viewport range), y=n, color from graph shards."""
     t0 = time.monotonic()
@@ -227,6 +244,15 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     fmt = cfg.export_format.strip().lower()
     if fmt != "png":
         print("ERROR: heatmap export_format must be png.", file=sys.stderr)
+        sys.exit(1)
+    pixel_mode = str(cfg.pixel_mode).strip().lower()
+    if pixel_mode not in HEATMAP_PIXEL_MODE_CHOICES:
+        print(
+            "ERROR: heatmap pixel_mode must be one of "
+            + ", ".join(HEATMAP_PIXEL_MODE_CHOICES)
+            + f"; got {cfg.pixel_mode!r}.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     val_key = str(cfg.value_key).strip().lower()
     if val_key not in HEATMAP_VALUE_CHOICES:
@@ -343,16 +369,27 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
                 )
 
     import matplotlib.pyplot as plt
+    from matplotlib import colors
+    from matplotlib import image as mimage
 
-    fig, ax = plt.subplots(figsize=(float(cfg.width_in), float(cfg.height_in)), dpi=int(cfg.dpi))
     plot_data, vmin, vmax = _normalize_heat_for_render(
         heat,
-        trim_color_range=bool(cfg.trim_color_range),
+        trim_color_range_percent=int(cfg.trim_color_range_percent),
         per_n_color_range=bool(cfg.per_n_color_range),
     )
     masked = np.ma.masked_invalid(plot_data)
     cmap = plt.get_cmap(cfg.colormap).copy()
     cmap.set_bad((1.0, 1.0, 1.0, 0.0))
+    if pixel_mode == "exact":
+        norm = None if (vmin is None or vmax is None) else colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+        rgba = cmap(norm(masked) if norm is not None else masked)
+        mimage.imsave(cfg.output_path, rgba, format="png")
+        if verbose:
+            print(f"Wrote {os.path.abspath(cfg.output_path)} (PNG).")
+            print(f"Export time: {time.monotonic() - t0:.2f}s")
+        return
+
+    fig, ax = plt.subplots(figsize=(float(cfg.width_in), float(cfg.height_in)), dpi=int(cfg.dpi))
     im = ax.imshow(
         masked,
         origin="lower",
@@ -367,7 +404,8 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     ax.set_ylabel("n")
     title_label = "E_sorted/n" if val_key == "ev_n" else "(d/dp E_sorted)/n"
     range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
-    trim_label = "trim 1-99%" if bool(cfg.trim_color_range) else "full range"
+    trim_pct = int(cfg.trim_color_range_percent)
+    trim_label = f"trim {trim_pct}-{100 - trim_pct}%" if trim_pct > 0 else "full range"
     ax.set_title(f"N-p heatmap: {title_label} ({vp}; {range_label}; {trim_label})")
     if bool(cfg.show_legend):
         cbar = fig.colorbar(im, ax=ax)
@@ -400,6 +438,15 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
     fmt = cfg.export_format.strip().lower()
     if fmt != "png":
         print("ERROR: tie heatmap export_format must be png.", file=sys.stderr)
+        sys.exit(1)
+    pixel_mode = str(cfg.pixel_mode).strip().lower()
+    if pixel_mode not in HEATMAP_PIXEL_MODE_CHOICES:
+        print(
+            "ERROR: tie heatmap pixel_mode must be one of "
+            + ", ".join(HEATMAP_PIXEL_MODE_CHOICES)
+            + f"; got {cfg.pixel_mode!r}.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     value_key = str(cfg.value_key).strip().lower()
     if value_key not in TIE_HEATMAP_VALUE_CHOICES:
@@ -445,9 +492,21 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
         slope_recs = list(slope_list) if isinstance(slope_list, list) else []
 
         rr = row_by_n[n]
-        n_take = min(max_ties, len(recs))
+        if load_from == "l":
+            # Left mode must match HTML variant 5 semantics:
+            # native tie index t maps to rec_idx = center_idx + t, with t in 1..1000.
+            center_idx = _canonical_center_index_for_recs(int(n), recs)
+            if center_idx is None:
+                raise ValueError(f"n={n}: missing canonical center tie point in float_with_pairs_by_n")
+            m_nonneg = len(recs) - int(center_idx)
+            n_take = min(max_ties, max(0, m_nonneg - 1))
+        else:
+            n_take = min(max_ties, len(recs))
         for pos in range(n_take):
-            rec_idx = pos if load_from == "l" else (len(recs) - 1 - pos)
+            if load_from == "l":
+                rec_idx = int(center_idx) + (pos + 1)
+            else:
+                rec_idx = len(recs) - 1 - pos
             rec = recs[rec_idx]
             slope_rec = slope_recs[rec_idx] if rec_idx < len(slope_recs) else None
             heat[rr, pos] = _tie_heatmap_value_at_record(
@@ -458,20 +517,29 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
             )
 
     import matplotlib.pyplot as plt
+    from matplotlib import colors
+    from matplotlib import image as mimage
 
-    fig, ax = plt.subplots(figsize=(float(cfg.width_in), float(cfg.height_in)), dpi=int(cfg.dpi))
     plot_data, vmin, vmax = _normalize_heat_for_render(
         heat,
-        trim_color_range=bool(cfg.trim_color_range),
+        trim_color_range_percent=int(cfg.trim_color_range_percent),
         per_n_color_range=bool(cfg.per_n_color_range),
     )
     masked = np.ma.masked_invalid(plot_data)
     cmap = plt.get_cmap(cfg.colormap).copy()
     cmap.set_bad((1.0, 1.0, 1.0, 0.0))
+    if pixel_mode == "exact":
+        norm = None if (vmin is None or vmax is None) else colors.Normalize(vmin=vmin, vmax=vmax, clip=True)
+        rgba = cmap(norm(masked) if norm is not None else masked)
+        mimage.imsave(cfg.output_path, rgba, format="png")
+        if verbose:
+            print(f"Wrote {os.path.abspath(cfg.output_path)} (PNG).")
+            print(f"Export time: {time.monotonic() - t0:.2f}s")
+        return
 
     if load_from == "l":
-        x_lo, x_hi = 0.0, float(max_ties - 1)
-        x_label = "tie # from center (0 = center)"
+        x_lo, x_hi = 1.0, float(max_ties)
+        x_label = "tie # from center (1..1000; center tie 0 excluded)"
     else:
         x_lo, x_hi = 1.0, float(max_ties)
         x_label = "tie # from end (1 = last)"
@@ -489,7 +557,8 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
     ax.set_xlabel(x_label)
     ax.set_ylabel("n")
     range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
-    trim_label = "trim 1-99%" if bool(cfg.trim_color_range) else "full range"
+    trim_pct = int(cfg.trim_color_range_percent)
+    trim_label = f"trim {trim_pct}-{100 - trim_pct}%" if trim_pct > 0 else "full range"
     ax.set_title(
         f"N-tie heatmap: {value_key} ({'left' if load_from == 'l' else 'right'} load; {range_label}; {trim_label})"
     )
