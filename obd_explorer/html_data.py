@@ -222,6 +222,7 @@ def _tie_explorer5_series_row_for_n(
     jv: list[int | None] = []
     lv: list[float | None] = []
     rv: list[float | None] = []
+    dv: list[float | None] = []
     ev_ns: list[float | None] = []
     for t in selected_native:
         rec_idx = center_idx + t
@@ -240,6 +241,7 @@ def _tie_explorer5_series_row_for_n(
                 pi, pj = int(first[0]), int(first[1])
         sl: float | None = None
         sr: float | None = None
+        ld: float | None = None
         evn: float | None = None
         if rec_idx < len(slope_list) and isinstance(slope_list[rec_idx], dict):
             sd = slope_list[rec_idx]
@@ -249,6 +251,9 @@ def _tie_explorer5_series_row_for_n(
                 sl = float(raw_sl)
             if raw_sr is not None and np.isfinite(float(raw_sr)):
                 sr = float(raw_sr)
+            raw_ld = sd.get("log10_D")
+            if raw_ld is not None and np.isfinite(float(raw_ld)):
+                ld = float(raw_ld)
             raw_es = sd.get("expected_sorted")
             if raw_es is not None and np.isfinite(float(raw_es)):
                 evn = float(raw_es) / float(n)
@@ -257,17 +262,8 @@ def _tie_explorer5_series_row_for_n(
         jv.append(pj)
         lv.append(sl)
         rv.append(sr)
+        dv.append(ld)
         ev_ns.append(evn)
-
-    dv: list[float | None] = []
-    ev: list[float | None] = []
-    for a, b in zip(lv, rv):
-        if a is not None and b is not None:
-            dv.append(float(b - a))
-            ev.append(float(a - b))
-        else:
-            dv.append(None)
-            ev.append(None)
 
     return {
         "p": ps,
@@ -276,7 +272,6 @@ def _tie_explorer5_series_row_for_n(
         "l": lv,
         "r": rv,
         "d": dv,
-        "e": ev,
         "ev_n": ev_ns,
     }
 

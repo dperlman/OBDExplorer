@@ -7,8 +7,10 @@ from typing import Any
 
 import numpy as np
 
-# (p, i, j, slope_left, slope_right); slopes may be None if missing from payload.
-TieDrawEntry = tuple[float, int | None, int | None, float | None, float | None]
+# (p, i, j, slope_left, slope_right, log10_D); values may be None if missing from payload.
+# log10_D is log10 of the slope jump D = slope_right - slope_left, stored exactly in the shard: never
+# recompute it as the difference of the two slopes, which loses it to cancellation.
+TieDrawEntry = tuple[float, int | None, int | None, float | None, float | None, float | None]
 
 
 def load_tie_draw_entries_from_payload(
@@ -43,6 +45,7 @@ def load_tie_draw_entries_from_payload(
                 pr = round(pf, 6)
                 slope_sl: float | None = None
                 slope_sr: float | None = None
+                log10_d: float | None = None
                 if rec_idx < len(slope_list) and isinstance(slope_list[rec_idx], dict):
                     sd = slope_list[rec_idx]
                     sl = sd.get("slope_left")
@@ -51,14 +54,17 @@ def load_tie_draw_entries_from_payload(
                         slope_sl = float(sl)
                     if sr is not None and np.isfinite(float(sr)):
                         slope_sr = float(sr)
+                    ld = sd.get("log10_D")
+                    if ld is not None and np.isfinite(float(ld)):
+                        log10_d = float(ld)
                 plist = pairs or []
                 if not plist:
-                    segs.append((pr, None, None, slope_sl, slope_sr))
+                    segs.append((pr, None, None, slope_sl, slope_sr, log10_d))
                     continue
                 for ij in plist:
                     if not isinstance(ij, (list, tuple)) or len(ij) != 2:
                         continue
-                    segs.append((pr, int(ij[0]), int(ij[1]), slope_sl, slope_sr))
+                    segs.append((pr, int(ij[0]), int(ij[1]), slope_sl, slope_sr, log10_d))
         else:
             raw = float_by_n.get(n)
             if raw is None and isinstance(float_by_n, dict):
@@ -69,7 +75,7 @@ def load_tie_draw_entries_from_payload(
             for pf in arr.flat:
                 if not np.isfinite(pf) or not (tie_p_min <= float(pf) <= tie_p_max):
                     continue
-                segs.append((round(float(pf), 6), None, None, None, None))
+                segs.append((round(float(pf), 6), None, None, None, None, None))
         if segs:
             out[n] = segs
     return out

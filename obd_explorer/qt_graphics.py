@@ -32,6 +32,7 @@ def tie_rgba_for_color_key(
     slope_left: float | None,
     slope_right: float | None,
     alpha: float,
+    log10_d: float | None = None,
     cmap_name: str = "",
     fixed_color: tuple[float, float, float] | None = None,
     i_range: tuple[int, int] | None = None,
@@ -39,7 +40,6 @@ def tie_rgba_for_color_key(
     l_range: tuple[float, float] | None = None,
     r_range: tuple[float, float] | None = None,
     d_range: tuple[float, float] | None = None,
-    e_range: tuple[float, float] | None = None,
 ) -> tuple[float, float, float, float]:
     if fixed_color is not None:
         return (fixed_color[0], fixed_color[1], fixed_color[2], float(alpha))
@@ -69,32 +69,14 @@ def tie_rgba_for_color_key(
         v = float(slope_right)
         t = (v - lo) / (hi - lo) if hi > lo else 0.0
     elif k == "d":
-        if (
-            slope_left is None
-            or slope_right is None
-            or not np.isfinite(float(slope_left))
-            or not np.isfinite(float(slope_right))
-            or d_range is None
-        ):
+        if log10_d is None or not np.isfinite(float(log10_d)) or d_range is None:
             return (0.0, 0.0, 0.0, float(alpha))
         lo, hi = d_range
-        v = float(slope_right) - float(slope_left)
-        t = (v - lo) / (hi - lo) if hi > lo else 0.0
-    elif k == "e":
-        if (
-            slope_left is None
-            or slope_right is None
-            or not np.isfinite(float(slope_left))
-            or not np.isfinite(float(slope_right))
-            or e_range is None
-        ):
-            return (0.0, 0.0, 0.0, float(alpha))
-        lo, hi = e_range
-        v = float(slope_left) - float(slope_right)
+        v = float(log10_d)
         t = (v - lo) / (hi - lo) if hi > lo else 0.0
     else:
         raise ValueError(
-            f"Unknown tie color key {key!r} (expected black, i, j, l, r, d, e)"
+            f"Unknown tie color key {key!r} (expected black, i, j, l, r, d)"
         )
     r, g, b = cmap_rgb(cmap_name, float(np.clip(t, 0.0, 1.0)))
     return (r, g, b, float(alpha))

@@ -14,7 +14,7 @@ dependencies = [
   "sympy",
   "mpmath",
   "numba",
-  "obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.1.0",
+  "obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.2.1",
   "matplotlib",
   "plotly",
   "scikit-learn",
@@ -56,9 +56,6 @@ py-modules = [
   "plot_last_cusp_features",
   "plot_n_local_min_tie_points",
   "test_exact_tie_point_agreement",
-  "tie_diagnose_all_last_cusps",
-  "tie_flat_tol_sensitivity_sweep",
-  "tie_slope_diagnostic",
 ]
 
 [tool.setuptools.packages.find]

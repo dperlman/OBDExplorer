@@ -404,7 +404,6 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
             band_l_range = coord_range_for_n(entries, "l")
             band_r_range = coord_range_for_n(entries, "r")
             band_d_range = coord_range_for_n(entries, "d")
-            band_e_range = coord_range_for_n(entries, "e")
 
             ps = sorted({e[0] for e in entries})
             if ps:
@@ -491,6 +490,7 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                     ent_sl = tie_entry_for_p(ent_sorted, p_mid)
                     sl = ent_sl[3] if ent_sl and len(ent_sl) > 3 else None
                     sr = ent_sl[4] if ent_sl and len(ent_sl) > 4 else None
+                    ld = ent_sl[5] if ent_sl and len(ent_sl) > 5 else None
                     fill_records.append(
                         (
                             list(fx),
@@ -503,9 +503,9 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                             band_l_range,
                             band_r_range,
                             band_d_range,
-                            band_e_range,
                             sl,
                             sr,
+                            ld,
                         )
                     )
 
@@ -514,6 +514,7 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                 ti, tj = e[1], e[2]
                 sl = e[3] if len(e) > 3 else None
                 sr = e[4] if len(e) > 4 else None
+                ld = e[5] if len(e) > 5 else None
                 if n_upper is not None:
                     y_top = interpolate_y_at_p(*vp_xy[n_upper], float(p_use))
                 else:
@@ -535,10 +536,10 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                             band_l_range,
                             band_r_range,
                             band_d_range,
-                            band_e_range,
                             int(n_tie),
                             sl,
                             sr,
+                            ld,
                         )
                     )
 
@@ -608,9 +609,9 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                     lr,
                     rr,
                     dr,
-                    er,
                     sl,
                     sr,
+                    ld,
                 ) = rec
                 key = tie_spec.key_at_p(float(p_mid), vp_range_norm)
                 rgba = tie_rgba_for_color_key(
@@ -619,6 +620,7 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                     jj=tj,
                     slope_left=sl,
                     slope_right=sr,
+                    log10_d=ld,
                     alpha=tie_opacity_base,
                     cmap_name=fill_cmap,
                     i_range=ir,
@@ -626,7 +628,6 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                     l_range=lr,
                     r_range=rr,
                     d_range=dr,
-                    e_range=er,
                 )
                 r, g, b, a = rgba
                 fill_batches.append(
@@ -647,10 +648,10 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                     lr,
                     rr,
                     dr,
-                    er,
                     n_tie,
                     sl,
                     sr,
+                    ld,
                 ) = rec
                 if tie_opacity_k == 0.0:
                     seg_alpha = tie_opacity_base
@@ -670,6 +671,7 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                     jj=tj,
                     slope_left=sl,
                     slope_right=sr,
+                    log10_d=ld,
                     alpha=seg_alpha,
                     cmap_name=tie_cmap,
                     fixed_color=tie_fixed_color,
@@ -678,7 +680,6 @@ class OBDGraphExplorerWindow(QtWidgets.QMainWindow):
                     l_range=lr,
                     r_range=rr,
                     d_range=dr,
-                    e_range=er,
                 )
                 c0 = QtGui.QColor.fromRgbF(rgba[0], rgba[1], rgba[2], rgba[3])
                 tie_segments.append((float(p_use), float(y_bot), float(y_top), c0))

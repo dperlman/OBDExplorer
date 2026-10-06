@@ -14,4 +14,4 @@ dependencies:
   - umap-learn
   - pip
   - pip:
-      - obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.1.0
+      - obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.2.1

@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
-"""Overlay HP features vs N for one cusp row per ``N`` from the cusp sidecar pickle.
+"""Overlay features vs N for one cusp row per ``N`` from the cusp sidecar pickle.
 
-**Which row:** use only records with ``extremum_type == "minimum"``. Among those, take the
-row with **largest** ``p_float`` / ``p``; if several tie on ``p``, pick the larger
-``tie_index``.
-
-If **any** cusp row tied at the global maximum ``p`` for that ``N`` is **not** a ``minimum``
-(e.g. ``extremum_ambiguous``), that ``N`` yields **no** selected row (all series NaN): the
-highest-``p`` feature on the shard is not a trusted minimum.
+**Which row:** every record in the sidecar is a certified cusp; take the one with the **largest**
+``p_float`` (the last cusp); if several tie on ``p``, pick the larger ``tie_index``.
 
 **Y-axis assignment (precedence):** slopes (``PLOT_LEFT`` / ``PLOT_RIGHT``) then ``PLOT_P`` then
 ``PLOT_EV``. The first enabled group uses the main (left) y-axis; the second uses the first
 ``twinx`` on the right; the third uses a second ``twinx`` (spine offset when needed). Each axis
 is autoscaled to the finite values actually plotted for that group in the selected ``N`` range.
 
-When ``PLOT_EV`` is enabled, the EV curve is ``ev_mid_hp / N`` (per-point).
+When ``PLOT_EV`` is enabled, the EV curve is ``expected_sorted / N`` (per-point).
 
 Every ``N`` that passes ``--n-min`` / ``--n-max`` / parity gets a point; missing or non-finite
 values are stored as NaN so lines show gaps instead of dropping ``N``.
@@ -56,29 +51,12 @@ def _tie_p(rec: dict) -> float:
     return float(rec["p"])
 
 
-def _minima_records(records: list[dict]) -> list[dict]:
-    return [r for r in records if str(r.get("extremum_type", "")) == "minimum"]
+def _select_highest_p_cusp_record(records: list[dict]) -> dict | None:
+    """The cusp with the largest ``p``; tie-break larger ``tie_index``.
 
-
-def _select_highest_p_minimum_record(records: list[dict]) -> dict | None:
-    """Among ``minimum`` rows only, argmax ``p``; tie-break larger ``tie_index``.
-
-    Returns ``None`` if there are no minima, or if any row at the shard-wide maximum ``p``
-    is not a ``minimum`` (e.g. ambiguous has the top ``p``).
+    Every record in the sidecar is a certified cusp, so no filtering is needed.
     """
     if not records:
-        return None
-    max_p = max(_tie_p(r) for r in records)
-    if not math.isfinite(max_p):
-        return None
-    for r in records:
-        if not math.isclose(_tie_p(r), max_p, rel_tol=0.0, abs_tol=1e-12):
-            continue
-        if str(r.get("extremum_type", "")) != "minimum":
-            return None
-
-    pool = _minima_records(records)
-    if not pool:
         return None
 
     def _sort_key(r: dict) -> tuple[float, int]:
@@ -88,7 +66,7 @@ def _select_highest_p_minimum_record(records: list[dict]) -> dict | None:
             ti = 0
         return (_tie_p(r), ti)
 
-    return max(pool, key=_sort_key)
+    return max(records, key=_sort_key)
 
 
 def _parse_hp_number(s: object) -> float | None:
@@ -104,10 +82,6 @@ def _parse_hp_number(s: object) -> float | None:
 
 
 def _last_cusp_p(rec: dict) -> float | None:
-    if "p_hp_main" in rec:
-        v = _parse_hp_number(rec.get("p_hp_main"))
-        if v is not None:
-            return v
     if "p_float" in rec:
         return _parse_hp_number(rec["p_float"])
     return _parse_hp_number(rec.get("p"))
@@ -146,7 +120,7 @@ def main() -> None:
         raise SystemExit("Enable at least one of PLOT_LEFT, PLOT_RIGHT, PLOT_P, PLOT_EV.")
 
     parser = argparse.ArgumentParser(
-        description="Overlay last-cusp HP slopes / p / EV vs N (see module toggles)."
+        description="Overlay last-cusp slopes / p / EV vs N (see module toggles)."
     )
     parser.add_argument(
         "--input",
@@ -188,7 +162,7 @@ def main() -> None:
     parser.add_argument(
         "--title",
         type=str,
-        default="Highest-p minimum (cusp): features vs N",
+        default="Last cusp (highest p): features vs N",
         help="Figure title.",
     )
     args = parser.parse_args()
@@ -222,12 +196,12 @@ def main() -> None:
         records = block.get("records")
         if not isinstance(records, list):
             records = []
-        rec = _select_highest_p_minimum_record(records)
+        rec = _select_highest_p_cusp_record(records)
 
-        sl = _parse_hp_number(rec.get("slope_left_hp")) if rec else None
-        sr = _parse_hp_number(rec.get("slope_right_hp")) if rec else None
+        sl = _parse_hp_number(rec.get("slope_left")) if rec else None
+        sr = _parse_hp_number(rec.get("slope_right")) if rec else None
         pv = _last_cusp_p(rec) if rec else None
-        ev = _parse_hp_number(rec.get("ev_mid_hp")) if rec else None
+        ev = _parse_hp_number(rec.get("expected_sorted")) if rec else None
 
         ns.append(ni)
         left_y.append(_finite_or_nan(sl) if PLOT_LEFT else float("nan"))
@@ -291,11 +265,11 @@ def main() -> None:
     if PLOT_LEFT and ax_sl is not None:
         (h,) = ax_sl.plot(ns, left_y, color="tab:blue", linewidth=1.5, marker=".", markersize=4)
         legend_handles.append(h)
-        legend_labels.append("slope_left_hp")
+        legend_labels.append("slope_left")
     if PLOT_RIGHT and ax_sl is not None:
         (h,) = ax_sl.plot(ns, right_y, color="tab:orange", linewidth=1.5, marker=".", markersize=4)
         legend_handles.append(h)
-        legend_labels.append("slope_right_hp")
+        legend_labels.append("slope_right")
     if plot_slopes and ax_sl is not None:
         series_for_slope: list[list[float]] = []
         if PLOT_LEFT:
@@ -304,22 +278,22 @@ def main() -> None:
             series_for_slope.append(right_y)
         _autoscale_ylim_from_series(ax_sl, *series_for_slope)
         if layers[0] == "slopes":
-            ax_sl.set_ylabel("HP 3-point slope")
+            ax_sl.set_ylabel("slope at the last cusp")
 
     if PLOT_P and ax_p is not None:
         (h,) = ax_p.plot(ns, p_y, color="tab:red", linewidth=1.5, marker=".", markersize=4)
         legend_handles.append(h)
-        legend_labels.append("tie p (HP), highest-p minimum")
+        legend_labels.append("tie p, last cusp")
         _autoscale_ylim_from_series(ax_p, p_y)
-        ax_p.set_ylabel("tie p (HP), highest-p minimum", color="tab:red")
+        ax_p.set_ylabel("tie p, last cusp", color="tab:red")
         ax_p.tick_params(axis="y", labelcolor="tab:red")
 
     if PLOT_EV and ax_ev is not None:
         (h,) = ax_ev.plot(ns, ev_y, color="tab:green", linewidth=1.5, marker=".", markersize=4)
         legend_handles.append(h)
-        legend_labels.append("ev_mid_hp / N")
+        legend_labels.append("E / N")
         _autoscale_ylim_from_series(ax_ev, ev_y)
-        ax_ev.set_ylabel("E_sorted at tie / N (HP)", color="tab:green")
+        ax_ev.set_ylabel("E at the last cusp / N", color="tab:green")
         ax_ev.tick_params(axis="y", labelcolor="tab:green")
 
     ax_main.set_xlim(float(min(ns)), float(max(ns)))
