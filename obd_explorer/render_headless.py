@@ -625,6 +625,7 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
             print(f"Export time: {time.monotonic() - t0:.2f}s")
         return
 
+    fig, ax = plt.subplots(figsize=(float(cfg.width_in), float(cfg.height_in)), dpi=int(cfg.dpi))
     if load_from == "l":
         x_lo, x_hi = 1.0, float(max_ties)
         x_label = "tie # from center (1..1000; center tie 0 excluded)"
@@ -647,15 +648,16 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
     range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
     trim_pct = int(cfg.trim_color_range_percent)
     trim_label = f"trim {trim_pct}-{100 - trim_pct}%" if trim_pct > 0 else "full range"
+    value_label = "log10 D (slope jump)" if value_key == "d" else value_key
     ax.set_title(
-        f"N-tie heatmap: {value_key} ({'left' if load_from == 'l' else 'right'} load; {range_label}; {trim_label})"
+        f"N-tie heatmap: {value_label} ({'left' if load_from == 'l' else 'right'} load; {range_label}; {trim_label})"
     )
     if bool(cfg.show_legend):
         cbar = fig.colorbar(im, ax=ax)
         if bool(cfg.per_n_color_range):
-            cbar.set_label(f"{value_key} (row-normalized)")
+            cbar.set_label(f"{value_label} (row-normalized)")
         else:
-            cbar.set_label(value_key)
+            cbar.set_label(value_label)
     fig.tight_layout()
     fig.savefig(cfg.output_path, format="png")
     plt.close(fig)
