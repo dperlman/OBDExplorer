@@ -11,7 +11,7 @@ import numpy as np
 from obd_explorer.html_data import EXPLORER5_MAX_TIE_INDEX
 
 
-_TIE_PACK_FIELDS = ("p", "i", "j", "l", "r", "d", "e", "ev_n")
+_TIE_PACK_FIELDS = ("p", "i", "j", "l", "r", "d", "ev_n")
 
 
 def _pack_float32_base64(values: object) -> str:
@@ -237,8 +237,7 @@ def build_explorer6_html(
         <option value="j">j</option>
         <option value="l">l (slope left)</option>
         <option value="r">r (slope right)</option>
-        <option value="d">d (r − l)</option>
-        <option value="e">e (l − r)</option>
+        <option value="d">d (log10 D, slope jump)</option>
         <option value="p">p (tie)</option>
         <option value="ev_n">ev/n</option>
       </select>
@@ -294,7 +293,7 @@ def build_explorer6_html(
     const TIE_IDX_MAX = {tm};
     const USER_TIE_MAX = {ui_max};
     const COLOR_LUT = {color_lut_json};
-    const TIE_FIELDS = ["p", "i", "j", "l", "r", "d", "e", "ev_n"];
+    const TIE_FIELDS = ["p", "i", "j", "l", "r", "d", "ev_n"];
 
     function decodeBase64Float32(b64) {{
       if (!b64) return new Float32Array(0);

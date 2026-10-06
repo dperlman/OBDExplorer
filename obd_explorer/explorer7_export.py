@@ -11,7 +11,7 @@ from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, _is_canonical_center_tie, iter
 from obd_explorer.explorer7_html import build_explorer7_html
 
 
-_TIE_FIELDS = ("i", "j", "l", "r", "d", "e")
+_TIE_FIELDS = ("i", "j", "l", "r", "d")
 
 
 def _pack_float32_base64(values: np.ndarray) -> str:
@@ -96,6 +96,7 @@ def _tie_proxy_rows_by_n(
 
             sl = float("nan")
             sr = float("nan")
+            d_val = float("nan")
             if rec_idx < len(slopes) and isinstance(slopes[rec_idx], dict):
                 s = slopes[rec_idx]
                 raw_sl = s.get("slope_left")
@@ -104,8 +105,9 @@ def _tie_proxy_rows_by_n(
                     sl = float(raw_sl)
                 if raw_sr is not None and np.isfinite(float(raw_sr)):
                     sr = float(raw_sr)
-            d_val = (sr - sl) if np.isfinite(sr) and np.isfinite(sl) else float("nan")
-            e_val = (sl - sr) if np.isfinite(sr) and np.isfinite(sl) else float("nan")
+                raw_ld = s.get("log10_D")
+                if raw_ld is not None and np.isfinite(float(raw_ld)):
+                    d_val = float(raw_ld)
 
             p_src.append(p)
             val_src["i"].append(i_val)
@@ -113,7 +115,6 @@ def _tie_proxy_rows_by_n(
             val_src["l"].append(sl)
             val_src["r"].append(sr)
             val_src["d"].append(d_val)
-            val_src["e"].append(e_val)
 
         if not p_src:
             continue

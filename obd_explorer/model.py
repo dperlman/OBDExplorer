@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Each viewport half uses one of these axes for tie/fill colormap scalars.
-TIE_COLOR_AXIS_CHOICES: tuple[str, ...] = ("black", "i", "j", "l", "r", "d", "e")
+TIE_COLOR_AXIS_CHOICES: tuple[str, ...] = ("black", "i", "j", "l", "r", "d")
 _TIE_COLOR_AXIS_SET: frozenset[str] = frozenset(TIE_COLOR_AXIS_CHOICES)
 
 
@@ -14,8 +14,8 @@ class TieColorSpec:
     """Tie / fill colormap: independent ``left`` and ``right`` axis choices.
 
     ``i`` / ``j``: rank indices along the band. ``l`` / ``r``: ``slope_left`` / ``slope_right``
-    from tie metadata. ``d`` / ``e``: ``slope_right - slope_left`` / ``slope_left - slope_right``
-    (ranges computed per band from the same shard slopes).
+    from tie metadata. ``d``: ``log10 D``, the log of the slope jump ``D = slope_right - slope_left``
+    stored exactly in the shard (ranges computed per band).
 
     In a **full** p window, :meth:`key_at_p` uses ``left`` when ``p < 0.5`` and ``right`` when
     ``p ≥ 0.5``. In **left** ``[0, 0.5]`` only ``left`` applies; in **right** ``[0.5, 1]`` only

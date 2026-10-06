@@ -62,8 +62,8 @@ HTML_COLOR_SCALE_CHOICES: tuple[str, ...] = (
     "gist_ncar",
 )
 
-HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n", "eslope_n")
-TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
+HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "ev_n", "eslope_n")
+TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "ev_n")
 HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
 
 
@@ -692,14 +692,14 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
         ),  # j
         (
             "tie_color_left",
-            'tie_color_left ("black"|"i"|"j"|"l"|"r"|"d"|"e")',
+            'tie_color_left ("black"|"i"|"j"|"l"|"r"|"d")',
             _parse_tie_color_axis,
             "Colormap axis for p < 0.5 in full window, or for left p window [0, 0.5]. "
-            "d = slope_right − slope_left, e = slope_left − slope_right (from tie shard slopes).",
+            "d = log10 D, the slope jump slope_right − slope_left, stored exactly in the tie shards.",
         ),  # k
         (
             "tie_color_right",
-            'tie_color_right ("black"|"i"|"j"|"l"|"r"|"d"|"e")',
+            'tie_color_right ("black"|"i"|"j"|"l"|"r"|"d")',
             _parse_tie_color_axis,
             "Colormap axis for p ≥ 0.5 in full window, or for right p window [0.5, 1]. Same letters as tie_color_left.",
         ),  # l
@@ -1488,7 +1488,7 @@ def main() -> None:
         required=True,
         help="1=graph (shards), 2=two-panel binomial+PCA (shards), 3=quad+E[X] (shards), 4=PCA-only (shards), "
         "5=tie scalar vs n (tie shards), 6=tie scalar vs tie # (tie shards), "
-        "7=nearest tie values graph explorer (variant-1 style with nearest-tie i/j/l/r/d/e on p-grid).",
+        "7=nearest tie values graph explorer (variant-1 style with nearest-tie i/j/l/r/d on p-grid; d = log10 D).",
     )
     p_html.add_argument(
         "-o",
@@ -1547,7 +1547,7 @@ def main() -> None:
         "--tie-color-left",
         default="i",
         choices=TIE_COLOR_AXIS_CHOICES,
-        help="Tie/fill axis for left half (full p) or left p window: black, i, j, l, r, d, e.",
+        help="Tie/fill axis for left half (full p) or left p window: black, i, j, l, r, d (log10 D).",
     )
     p_exp.add_argument(
         "--tie-color-right",
@@ -1598,7 +1598,7 @@ def main() -> None:
         "--value",
         default="ev_n",
         choices=HEATMAP_VALUE_CHOICES,
-        help='Heatmap value: i/j/l/r/d/e from nearest tie proxy, or "ev_n"/"eslope_n" from graph shards.',
+        help='Heatmap value: i/j/l/r/d (d = log10 D) from nearest tie proxy, or "ev_n"/"eslope_n" from graph shards.',
     )
     p_hm.add_argument(
         "--colormap",
@@ -1653,7 +1653,7 @@ def main() -> None:
         "--value",
         default="d",
         choices=TIE_HEATMAP_VALUE_CHOICES,
-        help='Tie heatmap value key: i, j, l, r, d, e, or ev_n.',
+        help='Tie heatmap value key: i, j, l, r, d (log10 D, the slope jump), or ev_n.',
     )
     p_thm.add_argument(
         "--load-from",

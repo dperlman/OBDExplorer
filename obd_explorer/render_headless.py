@@ -33,11 +33,11 @@ from obd_explorer.qt_graphics import PolyFillBatch, TieLineBatch, is_color_name,
 from obd_explorer.tie_data import resolve_tie_draw_entries
 
 
-HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n", "eslope_n")
-TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e", "ev_n")
+HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "ev_n", "eslope_n")
+TIE_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "ev_n")
 HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
 GRAPH_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("ev_n", "eslope_n")
-TIE_PROXY_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d", "e")
+TIE_PROXY_HEATMAP_VALUE_CHOICES: tuple[str, ...] = ("i", "j", "l", "r", "d")
 
 
 @dataclass
@@ -101,7 +101,7 @@ class HeatmapExportConfig:
 class TieHeatmapExportConfig:
     n_min: int = 2
     n_max: int = 1000
-    value_key: str = "d"  # i|j|l|r|d|e|ev_n
+    value_key: str = "d"  # i|j|l|r|d|ev_n  (d = log10 D, the slope jump)
     colormap: str = "viridis"
     show_legend: bool = False
     load_from: str = "l"  # l: center-out, r: end-in
@@ -186,11 +186,15 @@ def _tie_heatmap_value_at_record(
 
     sl: float = float("nan")
     sr: float = float("nan")
+    ld: float = float("nan")
     evn: float = float("nan")
     if isinstance(slope_rec, dict):
         raw_sl = slope_rec.get("slope_left")
         raw_sr = slope_rec.get("slope_right")
+        raw_ld = slope_rec.get("log10_D")
         raw_es = slope_rec.get("expected_sorted")
+        if raw_ld is not None and np.isfinite(float(raw_ld)):
+            ld = float(raw_ld)
         if raw_sl is not None and np.isfinite(float(raw_sl)):
             sl = float(raw_sl)
         if raw_sr is not None and np.isfinite(float(raw_sr)):
@@ -207,9 +211,7 @@ def _tie_heatmap_value_at_record(
     if value_key == "r":
         return sr
     if value_key == "d":
-        return (sr - sl) if np.isfinite(sr) and np.isfinite(sl) else float("nan")
-    if value_key == "e":
-        return (sl - sr) if np.isfinite(sr) and np.isfinite(sl) else float("nan")
+        return ld
     if value_key == "ev_n":
         return evn
     raise ValueError(f"Unsupported tie heatmap value key: {value_key!r}")
@@ -398,7 +400,7 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
             )
         from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
 
-        need_slopes = val_key in ("l", "r", "d", "e")
+        need_slopes = val_key in ("l", "r", "d")
         n_rows = iter_tie_points_from_shards(
             path=DEFAULT_TIE_OUTPUT,
             n_list=n_vals,
@@ -486,9 +488,7 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     elif val_key == "eslope_n":
         title_label = "(d/dp E_sorted)/n"
     elif val_key == "d":
-        title_label = "d (r-l) via nearest tie"
-    elif val_key == "e":
-        title_label = "e (l-r) via nearest tie"
+        title_label = "log10 D (slope jump) via nearest tie"
     else:
         title_label = f"{val_key} via nearest tie"
     range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
@@ -625,6 +625,7 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
             print(f"Export time: {time.monotonic() - t0:.2f}s")
         return
 
+    fig, ax = plt.subplots(figsize=(float(cfg.width_in), float(cfg.height_in)), dpi=int(cfg.dpi))
     if load_from == "l":
         x_lo, x_hi = 1.0, float(max_ties)
         x_label = "tie # from center (1..1000; center tie 0 excluded)"
@@ -647,15 +648,16 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
     range_label = "per-N" if bool(cfg.per_n_color_range) else "global"
     trim_pct = int(cfg.trim_color_range_percent)
     trim_label = f"trim {trim_pct}-{100 - trim_pct}%" if trim_pct > 0 else "full range"
+    value_label = "log10 D (slope jump)" if value_key == "d" else value_key
     ax.set_title(
-        f"N-tie heatmap: {value_key} ({'left' if load_from == 'l' else 'right'} load; {range_label}; {trim_label})"
+        f"N-tie heatmap: {value_label} ({'left' if load_from == 'l' else 'right'} load; {range_label}; {trim_label})"
     )
     if bool(cfg.show_legend):
         cbar = fig.colorbar(im, ax=ax)
         if bool(cfg.per_n_color_range):
-            cbar.set_label(f"{value_key} (row-normalized)")
+            cbar.set_label(f"{value_label} (row-normalized)")
         else:
-            cbar.set_label(value_key)
+            cbar.set_label(value_label)
     fig.tight_layout()
     fig.savefig(cfg.output_path, format="png")
     plt.close(fig)
@@ -823,7 +825,6 @@ def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) ->
         band_l_range = coord_range_for_n(entries, "l")
         band_r_range = coord_range_for_n(entries, "r")
         band_d_range = coord_range_for_n(entries, "d")
-        band_e_range = coord_range_for_n(entries, "e")
 
         if do_fill:
             ps = sorted({e[0] for e in entries})
@@ -874,12 +875,14 @@ def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) ->
                     ent_sl = tie_entry_for_p(ent_sorted, p_mid)
                     sl = ent_sl[3] if ent_sl and len(ent_sl) > 3 else None
                     sr = ent_sl[4] if ent_sl and len(ent_sl) > 4 else None
+                    ld = ent_sl[5] if ent_sl and len(ent_sl) > 5 else None
                     rgba = tie_rgba_for_color_key(
                         key,
                         ii=ti,
                         jj=tj,
                         slope_left=sl,
                         slope_right=sr,
+                        log10_d=ld,
                         alpha=tie_alpha,
                         cmap_name=fill_cmap,
                         i_range=band_i_range,
@@ -887,7 +890,6 @@ def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) ->
                         l_range=band_l_range,
                         r_range=band_r_range,
                         d_range=band_d_range,
-                        e_range=band_e_range,
                     )
                     if n_upper is not None:
                         x_up, y_up = vp_xy[n_upper]
@@ -939,6 +941,7 @@ def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) ->
                 ti, tj = e[1], e[2]
                 sl = e[3] if len(e) > 3 else None
                 sr = e[4] if len(e) > 4 else None
+                ld = e[5] if len(e) > 5 else None
                 if tie_line_opacity_k == 0.0:
                     seg_alpha = tie_alpha
                 else:
@@ -955,6 +958,7 @@ def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) ->
                     jj=tj,
                     slope_left=sl,
                     slope_right=sr,
+                    log10_d=ld,
                     alpha=seg_alpha,
                     cmap_name=tie_cmap,
                     fixed_color=tie_fixed_color,
@@ -963,7 +967,6 @@ def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) ->
                     l_range=band_l_range,
                     r_range=band_r_range,
                     d_range=band_d_range,
-                    e_range=band_e_range,
                 )
                 if n_upper is not None:
                     y_top = interpolate_y_at_p(*vp_xy[n_upper], p_use)

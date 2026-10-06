@@ -123,29 +123,16 @@ def coord_range_for_n(entries: list[tuple], key: str) -> tuple[int, int] | tuple
             return None
         return float(min(vals)), float(max(vals))
     if key == "d":
-        vals = []
-        for e in entries:
-            if len(e) > 4 and e[3] is not None and e[4] is not None:
-                sl = float(e[3])
-                sr = float(e[4])
-                if np.isfinite(sl) and np.isfinite(sr):
-                    vals.append(sr - sl)
-        if not vals:
-            return None
-        return float(min(vals)), float(max(vals))
-    if key == "e":
-        vals = []
-        for e in entries:
-            if len(e) > 4 and e[3] is not None and e[4] is not None:
-                sl = float(e[3])
-                sr = float(e[4])
-                if np.isfinite(sl) and np.isfinite(sr):
-                    vals.append(sl - sr)
+        vals = [
+            float(e[5])
+            for e in entries
+            if len(e) > 5 and e[5] is not None and np.isfinite(float(e[5]))
+        ]
         if not vals:
             return None
         return float(min(vals)), float(max(vals))
     raise ValueError(
-        f'coord_range_for_n key must be "i", "j", "l", "r", "d", or "e"; got {key!r}'
+        f'coord_range_for_n key must be "i", "j", "l", "r", or "d"; got {key!r}'
     )
 
 

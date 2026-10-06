@@ -221,8 +221,7 @@ def build_explorer7_html(
         <option value="j">j</option>
         <option value="l">l</option>
         <option value="r">r</option>
-        <option value="d" selected>d (r-l)</option>
-        <option value="e">e (l-r)</option>
+        <option value="d" selected>d (log10 D, slope jump)</option>
       </select>
       <label><input type="checkbox" id="log-x"> Log x</label>
       <label><input type="checkbox" id="log-y"> Log y</label>
@@ -301,8 +300,7 @@ def build_explorer7_html(
     }}
 
     function fieldDisplay(field) {{
-      if (field === "d") return "d (r-l)";
-      if (field === "e") return "e (l-r)";
+      if (field === "d") return "d (log10 D)";
       return field;
     }}
     function valueByNP(n, pIdx, field) {{

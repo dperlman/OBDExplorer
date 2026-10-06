@@ -7,8 +7,11 @@ dependencies:
   - scipy
   - sympy
   - mpmath
+  - numba
   - matplotlib
   - plotly
   - scikit-learn
   - umap-learn
   - pip
+  - pip:
+      - obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.2.1

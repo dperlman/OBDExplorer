@@ -50,6 +50,9 @@ This repository is organized around a few workflows:
 - Core (non-GUI) dependencies:
   - `pip install -r requirements.txt`
   - or use `environment.yml` with conda
+- The shared core mathematics (tie points, slopes, certified cusps) comes from
+  [OBD-core](https://github.com/dperlman/OBD-core), pinned to a release tag. To work on both at
+  once, clone it next to this repo and install it editable: `pip install -e ../OBD-core`.
 - GUI is optional and only needed for GUI-based workflows:
   - `pip install ".[gui]"`
 - Standard packaging/dependency metadata is in `pyproject.toml`.
