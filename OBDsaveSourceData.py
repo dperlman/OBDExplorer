@@ -9,6 +9,7 @@ import sys
 import time
 import numpy as np
 import obd_core
+from obd_core import reference as obd_reference
 from scipy.special import comb, gammaln
 from sympy import S, binomial
 
@@ -589,6 +590,8 @@ def _compute_tie_shard(n: int, shards_dir_abs: str) -> dict:
     t0 = time.perf_counter()
     table, stats = _tie_table_for_n(int(n))
     cusp_ps = table["p"][table["is_cusp"]]
+    # every row against bounds proved from the definitions (milliseconds; see check_tie_points)
+    inv = obd_reference.check_invariants(int(n), table)
     t_compute = time.perf_counter() - t0
 
     t_write0 = time.perf_counter()
@@ -603,6 +606,8 @@ def _compute_tie_shard(n: int, shards_dir_abs: str) -> dict:
         "max_cusp_p": (float(cusp_ps.max()) if cusp_ps.size else None),
         "n_checked": int(stats["n_checked"]),
         "n_unresolved": int(stats["n_unresolved"]),
+        "invariants_ok": bool(inv["ok"]),
+        "invariant_violations": {k: v for k, v in inv["violations"].items() if v},
         "compute_sec": float(t_compute),
         "write_sec": float(t_write),
         "shard_path_abs": shard_path_abs,
@@ -618,8 +623,14 @@ def save_tie_points(
     save_every: int = 10,
     workers: int = DEFAULT_WORKERS,
     verbose: bool = False,
+    spot_check: bool = True,
 ) -> None:
     """Compute every tie point for each n and save one Parquet table per n.
+
+    Every new table is checked on all rows against proved invariants before it is written (a
+    failure is printed, logged and recorded in the manifest as ``invariants_ok: false``).  With
+    ``spot_check``, a few of the new n are then read back from disk and sampled against the rigorous
+    reference (``obd_core.reference``); see ``check_tie_points``.
 
     Tables go to ``<shards_dir>/n=NNNNN/part.parquet``; the JSON manifest at ``path`` lists them with
     per-n counts. The manifest is saved every ``save_every`` computed n (plus a final save), and a
@@ -628,7 +639,7 @@ def save_tie_points(
 
     Manifest keys: ``format``, ``created_at``, ``updated_at``, ``obd_core_version``, and
     ``n_entries[str(n)]`` with ``n``, ``path`` (relative to the manifest), ``tie_points``,
-    ``cusps``, ``max_cusp_p``, ``n_checked``, ``n_unresolved``, ``updated_at``.
+    ``cusps``, ``max_cusp_p``, ``n_checked``, ``n_unresolved``, ``invariants_ok``, ``updated_at``.
     """
     ns = n_list if n_list is not None else N_LIST
     _ensure_parent_dir(path)
@@ -676,13 +687,14 @@ def save_tie_points(
 
     csv_fields = [
         "run_started_at", "n", "compute_sec", "write_sec", "iter_total_sec",
-        "tie_points", "cusps", "max_cusp_p", "n_checked", "n_unresolved",
+        "tie_points", "cusps", "max_cusp_p", "n_checked", "n_unresolved", "invariants_ok",
     ]
     with open(csv_log_path, "w", newline="") as csv_f:
         csv_writer = csv.DictWriter(csv_f, fieldnames=csv_fields, lineterminator="\n")
         csv_writer.writeheader()
         t_total = time.perf_counter()
-        counters = {"computed": 0, "since_save": 0, "writes": 0, "unresolved": 0}
+        counters = {"computed": 0, "since_save": 0, "writes": 0, "unresolved": 0, "invariant_failures": 0}
+        computed_ns: list[int] = []
         manifest_parent = os.path.dirname(os.path.abspath(path)) or "."
 
         if verbose and pending_ns:
@@ -694,6 +706,12 @@ def save_tie_points(
             max_p = result["max_cusp_p"]
             n_unres = int(result["n_unresolved"])
             counters["unresolved"] += n_unres
+            if not result["invariants_ok"]:
+                counters["invariant_failures"] += 1
+                print(
+                    f"WARNING: n={n_val}: tie table fails proved invariants {result['invariant_violations']} "
+                    "-- this is a bug, not rounding; check it with python OBDsaveSourceData.py --check-tie-points"
+                )
             if n_unres:
                 print(
                     f"WARNING: n={n_val}: {n_unres} tie point(s) UNRESOLVED even at 200 digits; "
@@ -707,10 +725,12 @@ def save_tie_points(
                 "max_cusp_p": (float(max_p) if max_p is not None else None),
                 "n_checked": int(result["n_checked"]),
                 "n_unresolved": n_unres,
+                "invariants_ok": bool(result["invariants_ok"]),
                 "updated_at": str(result["updated_at"]),
             }
             counters["computed"] += 1
             counters["since_save"] += 1
+            computed_ns.append(n_val)
             t_c, t_w = float(result["compute_sec"]), float(result["write_sec"])
             csv_writer.writerow(
                 {
@@ -724,6 +744,7 @@ def save_tie_points(
                     "max_cusp_p": (f"{float(max_p):.12f}" if max_p is not None else ""),
                     "n_checked": int(result["n_checked"]),
                     "n_unresolved": n_unres,
+                    "invariants_ok": int(bool(result["invariants_ok"])),
                 }
             )
             csv_f.flush()
@@ -769,9 +790,68 @@ def save_tie_points(
         else:
             print(
                 f"Wrote tie tables ({counters['computed']} n computed, {n_skipped} skipped, "
-                f"{counters['writes']} manifest writes, unresolved={counters['unresolved']}) "
+                f"{counters['writes']} manifest writes, unresolved={counters['unresolved']}, "
+                f"invariant failures={counters['invariant_failures']}) "
                 f"to {shards_dir} with manifest={path} in {elapsed:.2f}s (log={csv_log_path})"
             )
+    if spot_check and computed_ns:
+        check_tie_points(path, n_list=_spread(sorted(computed_ns), 4), invariants=False, sample=8)
+
+
+def _spread(ns: list[int], k: int) -> list[int]:
+    """Up to k values spread across sorted ``ns`` (always the largest; n < 3 has no cusps to test)."""
+    ns = [n for n in ns if n >= 3]
+    if len(ns) <= k:
+        return ns
+    idx = sorted({round(t * (len(ns) - 1) / (k - 1)) for t in range(k)})
+    return [ns[i] for i in idx]
+
+
+def check_tie_points(
+    path: str = DEFAULT_TIE_OUTPUT,
+    n_list: list[int] | None = None,
+    invariants: bool = True,
+    sample: int = 8,
+    sample_ns: int = 4,
+) -> bool:
+    """Check the tie tables on disk; returns True if everything passes.
+
+    * ``invariants``: every row of every requested n against bounds proved from the definitions
+      (``obd_core.reference.check_invariants``): fast, and catches a single corrupt row.
+    * ``sample`` rows (plus the first and last) of ``sample_ns`` values of n spread over the range,
+      compared with the rigorous reference (``obd_core.reference.check_tie_table``): exact or
+      interval-arithmetic values, so the stored doubles must agree to ``expected_double_error(n)``
+      and every sampled cusp verdict must match.
+    """
+    manifest = load_tie_manifest(path)
+    all_ns = sorted(int(k) for k in manifest["n_entries"])
+    ns = all_ns if n_list is None else [int(n) for n in n_list]
+    ok = True
+    t0 = time.perf_counter()
+    if invariants:
+        bad = {}
+        for n, table in iter_tie_tables(path, n_list=ns, columns=("p", "E", "slope_left", "slope_right", "log10_D")):
+            res = obd_reference.check_invariants(n, table)
+            if not res["ok"]:
+                bad[n] = {k: v for k, v in res["violations"].items() if v}
+        ok &= not bad
+        print(
+            f"Invariants on every row of {len(ns)} n: "
+            + ("all pass" if not bad else f"FAIL at {len(bad)} n, e.g. {dict(list(bad.items())[:3])}")
+            + f" ({time.perf_counter() - t0:.1f}s)"
+        )
+    picked = _spread(ns, sample_ns) if n_list is None else [n for n in ns if n >= 3][:sample_ns] or ns
+    for n, table in iter_tie_tables(path, n_list=picked):
+        t = dict(table)
+        t["pstar"] = t.pop("p")
+        res = obd_reference.check_tie_table(n, t, sample=sample, seed=n)
+        good = res["verdicts_ok"] and res["within_expected"]
+        ok &= good
+        worst = ", ".join(f"{k} {v:.1e}" for k, v in res["max"].items())
+        print(f"Reference check n={n}, {len(res['rows'])} rows: {'pass' if good else 'FAIL'} "
+              f"(verdicts {'agree' if res['verdicts_ok'] else 'DISAGREE'}; worst rel. errors: {worst})")
+    print("Tie-point check: " + ("PASS" if ok else "FAIL -- something is wrong with the tie tables"))
+    return ok
 
 
 def print_timing_table(n_list: list[int] | None = None) -> None:
@@ -947,6 +1027,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--check-tie-points",
+        action="store_true",
+        help=(
+            "Check the tie tables on disk: every row of every n against proved invariants, and a "
+            "sample of rows of a few n against obd_core's rigorous reference."
+        ),
+    )
+    p.add_argument(
+        "--no-spot-check",
+        action="store_true",
+        help="Skip the reference spot check that --save-tie-points runs on a few new n at the end.",
+    )
+    p.add_argument(
         "--save-cusp-data",
         action="store_true",
         help=(
@@ -1093,6 +1186,7 @@ if __name__ == "__main__":
         or args.save_graph_data
         or args.print_comparison_table
         or args.print_timing_table
+        or args.check_tie_points
     )
     if not has_explicit_action:
         default_action = str(DEFAULT_ACTION).strip().lower()
@@ -1161,6 +1255,7 @@ if __name__ == "__main__":
             save_every=args.tie_save_every,
             workers=args.tie_workers,
             verbose=args.verbose,
+            spot_check=not args.no_spot_check,
         )
         save_cusp_table(
             tie_manifest_path=args.tie_output,
@@ -1178,6 +1273,7 @@ if __name__ == "__main__":
                 save_every=args.tie_save_every,
                 workers=args.tie_workers,
                 verbose=args.verbose,
+                spot_check=not args.no_spot_check,
             )
         if args.save_graph_data:
             save_graph_data(
@@ -1196,3 +1292,6 @@ if __name__ == "__main__":
                 n_list=tie_ns,
                 verbose=args.verbose,
             )
+    if args.check_tie_points:
+        if not check_tie_points(path=args.tie_output):
+            sys.exit(1)

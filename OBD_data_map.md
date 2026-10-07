@@ -56,6 +56,9 @@ Parquet settings match the ordered-binomial-cusps plotting datasets: zstd, `BYTE
   - `max_cusp_p`: `float | null` (p of the last cusp)
   - `n_checked`: `int` (tie points whose verdict needed interval or exact arithmetic)
   - `n_unresolved`: `int` (0 so far)
+  - `invariants_ok`: `bool`, whether the table passed `obd_core.reference.check_invariants` on every
+    row when it was built (tables built before 2026-10-07 lack it; check them with
+    `--check-tie-points`)
   - `updated_at`
 
 The loaders refuse anything else. The two pickle formats that came before are gone: v1 (before 2026-10-05) held finite-difference slopes that were wrong, with negative slope jumps at most tie points, missed cusps and impossible "maximum" labels; v2 (2026-10-05) held correct values as pickled lists of dicts.
@@ -89,7 +92,18 @@ All of it comes from `obd_core.tie_table(n, both_halves=True)`, the same code [o
 
 ### Tie CSV log columns
 
-`save_tie_points` writes `log/tie_points_verbose_<timestamp>.csv`: `run_started_at`, `n`, `compute_sec`, `write_sec`, `iter_total_sec`, `tie_points`, `cusps`, `max_cusp_p`, `n_checked`, `n_unresolved`.
+`save_tie_points` writes `log/tie_points_verbose_<timestamp>.csv`: `run_started_at`, `n`, `compute_sec`, `write_sec`, `iter_total_sec`, `tie_points`, `cusps`, `max_cusp_p`, `n_checked`, `n_unresolved`, `invariants_ok`.
+
+### Checks
+
+- **While building:** every new table is checked on all rows against bounds proved from the
+  definitions (`obd_core.reference.check_invariants`): 0 ≤ E ≤ n, p increasing,
+  slope_right ≥ slope_left, log₁₀ D finite, |E′| ≤ n^1.5/(2√(pq)), and E Lipschitz between
+  neighbouring tie points. Milliseconds per table, and it catches a single corrupt row. At the
+  end, a few of the new n are read back from disk and sampled against the rigorous reference
+  (`check_tie_table`). Skip that sample with `--no-spot-check`.
+- **On demand:** `python OBDsaveSourceData.py --check-tie-points` runs both on the data as it
+  stands (about 10 s for n = 2–1000) and exits non-zero on any failure.
 
 ## Pathway 2: graph data
 
