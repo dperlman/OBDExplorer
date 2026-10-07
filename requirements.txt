@@ -9,7 +9,7 @@ mpmath
 numba
 pyarrow
 # shared core mathematics (tie points, slopes, certified cusps); for development use
-#   pip install -e ../OBD-core
+#   pip install -c ../OBD-core/constraints.txt -e ../OBD-core
 obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.4.0
 matplotlib
 plotly
