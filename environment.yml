@@ -3,11 +3,12 @@ channels:
   - conda-forge
 dependencies:
   - python>=3.10
-  - numpy
+  - numpy=2.3.5          # numpy/numba/llvmlite/mpmath: OBD-core's constraints.txt (v0.3.3)
   - scipy
   - sympy
-  - mpmath
-  - numba
+  - mpmath=1.4.0
+  - numba=0.63.1
+  - llvmlite=0.46.0
   - pyarrow
   - matplotlib
   - plotly
@@ -15,4 +16,4 @@ dependencies:
   - umap-learn
   - pip
   - pip:
-      - obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.3.2
+      - obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.3.3
