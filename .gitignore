@@ -1,5 +1,6 @@
-# Large local datasets (not for GitHub)
-/data/
+# Large local datasets (not for GitHub): rebuilt by OBDsaveSourceData.py; see data/README.md
+/data/*
+!/data/README.md
 /html/*
 !/html/.gitkeep
 /html_old/

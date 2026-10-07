@@ -10,7 +10,7 @@ This document is a reference for the data files, data structures and dtypes writ
   - [Tie table columns](#tie-table-columns)
   - [How the tie values are computed](#how-the-tie-values-are-computed)
   - [Tie CSV log columns](#tie-csv-log-columns)
-- [Pathway 2: graph data shards](#pathway-2-graph-data-shards)
+- [Pathway 2: graph data](#pathway-2-graph-data)
 - [Pathway 3: cusp table](#pathway-3-cusp-table)
 - [Loaders](#loaders)
 - [Practical interpretation notes](#practical-interpretation-notes)
@@ -28,9 +28,8 @@ The built-in Markdown preview (same stack Cursor inherits) assigns each heading 
 - `data/tie_cusps.parquet`
   - every certified cusp of every n, one table
   - built by `OBDsaveSourceData.py --save-cusp-data` (from the tie tables)
-- `data/graph_data_shards/`
-  - per-`n` graph data shards (pickle) for the graph explorers
-  - manifest: `0000_manifest_p<steps>.pkl`
+- `data/graph_data_p01001.h5`
+  - the graph data (HDF5) for the graph explorers: masses, their ranking and E on a p grid
 - `log/`
   - timestamped CSV run logs for the tie pathway
 
@@ -92,20 +91,29 @@ All of it comes from `obd_core.tie_table(n, both_halves=True)`, the same code [o
 
 `save_tie_points` writes `log/tie_points_verbose_<timestamp>.csv`: `run_started_at`, `n`, `compute_sec`, `write_sec`, `iter_total_sec`, `tie_points`, `cusps`, `max_cusp_p`, `n_checked`, `n_unresolved`.
 
-## Pathway 2: graph data shards
+## Pathway 2: graph data
 
-Code path: `save_graph_data(...)` and `load_graph_data_from_shards(...)`. These feed the graph explorers (variants 1–4 and the Qt/headless graph export).
+Code path: `save_graph_data(...)` and `load_graph_data(...)`. These feed the graph explorers
+(variants 1–4), the headless graph export and the Qt GUI.
 
-Manifest `0000_manifest_p<steps>.pkl`: `format` `"obd.graph_data.shards.v3"`, `created_at`, `updated_at`, `p_steps`, `p_values` (`float32`, 0..1), `n_min`, `n_max`, `shards_dir`, and `n_entries[str(n)]` with `n`, `shard_path`, `rows` (= `p_steps`), `p_steps`, `k_count` (= `n+1`), dtype descriptors (`dtype_y` `float32`, `dtype_perm` `uint16`, `dtype_expected_sorted` `float64`), `updated_at`.
+One uncompressed HDF5 file per p grid: `data/graph_data_p<steps>.h5` (the default grid has 1001
+points, so `graph_data_p01001.h5`, 3.0 GB for n = 2–1000).
 
-Each shard (`format` `"obd.graph_data.n_shard.v3"`):
+- file attributes: `format` (`"obd.graph_data.hdf5.v4"`), `p_steps`, `created_at`, `updated_at`,
+  `obd_core_version`
+- dataset `p_values`: `(p_steps,)` `float32`, 0..1
+- one group per n, `nNNNNN` (e.g. `n01000`), with attributes `n`, `updated_at` and datasets:
+  - `y`: `(p_steps, n+1)` `float32`, the binomial masses (for drawing)
+  - `perm`: `(p_steps, n+1)` `uint16`, the stable argsort of the masses (for drawing)
+  - `expected_sorted_by_p`: `(p_steps,)` `float64`, E(n, p) at each grid p, from `obd_core.E_slopes_at`
 
-- `n`, `p_steps`
-- `y`: `(p_steps, n+1)` `float32`, the binomial masses (for drawing)
-- `perm`: `(p_steps, n+1)` `uint16`, the stable argsort of the masses (for drawing)
-- `expected_sorted_by_p`: `(p_steps,)` `float64`, E(n, p) at each grid p, from `obd_core.E_slopes_at`
-
-v3 (2026-10-06) took E from obd_core and dropped `expected_sorted_slope_by_p`, which v2 computed with `np.gradient` over the grid: a secant across every kink inside each grid step, not E'(p). The heatmap's `eslope_n` now computes the exact slope at each pixel instead (below).
+HDF5 because it is the standard portable format for numeric arrays (readers in C, R, Julia,
+MATLAB, Mathematica; the HDFView browser) and allows partial reads. Uncompressed because
+decompression costs more than it saves here: loading n = 2–1000 took 0.78 s uncompressed against
+3.0 s with lzf and 7.5 s with gzip, and 0.70 s from the pickles it replaced (benchmark,
+2026-10-07). Earlier formats: v3 (2026-10-06) was a pickle per n with the same content; v2
+additionally stored an `np.gradient` slope over the grid, a secant across every kink in each step,
+not E′(p). The `eslope_n` heatmap now computes the exact slope at each pixel instead.
 
 ## Pathway 3: cusp table
 
@@ -124,7 +132,7 @@ All in `OBDsaveSourceData.py`; tables are `dict[str, np.ndarray]` (column name �
 - `load_tie_tables(...)` → `{n: table}`, same arguments.
 - `tie_center_index(table)` → the row of `p = 1/2`.
 - `load_cusp_table(path, n_list=None, columns=None)` → one table for all cusps.
-- `load_graph_data_from_shards(...)` → `format`, `n_min`, `n_max`, `p_steps`, `p_half_start`, `p_values`, `rows_by_n[n]` with `y`, `perm`, `expected_sorted_by_p`, and `manifest_path`.
+- `load_graph_data(...)` → `format`, `n_min`, `n_max`, `p_steps`, `p_half_start`, `p_values`, `rows_by_n[n]` with `y`, `perm`, `expected_sorted_by_p`, and `manifest_path` (the HDF5 file).
 
 ## Practical interpretation notes
 

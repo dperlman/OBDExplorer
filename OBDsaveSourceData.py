@@ -5,9 +5,7 @@ from datetime import datetime
 import json
 import math
 import os
-import pickle
 import sys
-import tempfile
 import time
 import numpy as np
 import obd_core
@@ -31,9 +29,11 @@ DEFAULT_TIE_SHARDS_DIR = os.path.join(DATA_DIR, "tie_points")
 DEFAULT_TIE_MANIFEST_FILENAME = "manifest.json"
 DEFAULT_TIE_OUTPUT = os.path.join(DEFAULT_TIE_SHARDS_DIR, DEFAULT_TIE_MANIFEST_FILENAME)
 DEFAULT_CUSP_OUTPUT = os.path.join(DATA_DIR, "tie_cusps.parquet")
-DEFAULT_GRAPH_SHARDS_DIR = os.path.join(DATA_DIR, "graph_data_shards")
+# Graph data: one HDF5 file per p grid, data/graph_data_p<steps>.h5 (the "graph manifest" path
+# throughout the code is that file; the "graph shards dir" is the directory that holds it).
+DEFAULT_GRAPH_SHARDS_DIR = DATA_DIR
 DEFAULT_GRAPH_SHARDS_MANIFEST = os.path.join(
-    DEFAULT_GRAPH_SHARDS_DIR, f"0000_manifest_p{DEFAULT_GRAPH_P_STEPS:05d}.pkl"
+    DEFAULT_GRAPH_SHARDS_DIR, f"graph_data_p{DEFAULT_GRAPH_P_STEPS:05d}.h5"
 )
 DEFAULT_GRAPH_OUTPUT = DEFAULT_GRAPH_SHARDS_MANIFEST
 LOG_DIR = "log"
@@ -45,10 +45,11 @@ DEFAULT_WORKERS = 8
 # missed and mislabelled cusps.
 TIE_FORMAT = "obd.tie_points.parquet.v3"
 CUSP_FORMAT = "obd.tie_cusps.parquet.v5"
-# Graph shards v3 (2026-10-06): E from obd_core in float64; the np.gradient slope of v2 is gone
-# (the heatmap computes exact slopes with obd_core.E_slopes_at instead).
-GRAPH_MANIFEST_FORMAT = "obd.graph_data.shards.v3"
-GRAPH_SHARD_FORMAT = "obd.graph_data.n_shard.v3"
+# Graph data v4 (2026-10-07): one uncompressed HDF5 file per p grid, replacing a pickle per n with
+# the same content (v3).  v3 (2026-10-06) took E from obd_core in float64 and dropped v2's
+# np.gradient slope.  Uncompressed because on this machine's SSD decompression costs more than it
+# saves: measured load of n=2..1000 0.78 s uncompressed vs 3.0 s (lzf) and 7.5 s (gzip).
+GRAPH_FORMAT = "obd.graph_data.hdf5.v4"
 TIE_COLUMNS: tuple[str, ...] = (
     "p", "i", "j", "E", "slope_left", "slope_right", "log10_D", "is_cusp", "decided_by",
 )
@@ -67,45 +68,23 @@ def _ensure_parent_dir(path: str) -> None:
         os.makedirs(parent, exist_ok=True)
 
 
-def _atomic_pickle_dump(path: str, payload: dict) -> None:
-    """Write pickle atomically: dump to temp file in same directory, then os.replace()."""
-    _ensure_parent_dir(path)
-    parent = os.path.dirname(os.path.abspath(path)) or "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_pickle_", suffix=".pkl", dir=parent)
-    os.close(fd)
-    try:
-        with open(tmp_path, "wb") as f:
-            pickle.dump(payload, f)
-        os.replace(tmp_path, path)
-    finally:
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception:
-            pass
-
-
 def _tie_shard_filename_for_n(n: int) -> str:
     return os.path.join(f"n={int(n):05d}", "part.parquet")
 
 
-def _graph_shard_filename_for_n(n: int, p_steps: int) -> str:
-    return f"graph_n{int(n):04d}_p{int(p_steps):05d}.pkl"
-
-
 def _graph_manifest_filename_for_p_steps(p_steps: int) -> str:
-    return f"0000_manifest_p{int(p_steps):05d}.pkl"
+    return f"graph_data_p{int(p_steps):05d}.h5"
 
 
 def _resolve_graph_manifest_path(
     manifest_path: str | None, p_steps: int | None, shards_dir: str = DEFAULT_GRAPH_SHARDS_DIR
 ) -> str:
-    """Return the graph shard manifest path. No directory scanning or alternate-``p_steps`` fallback.
+    """Return the graph data file (HDF5). No directory scanning or alternate-``p_steps`` fallback.
 
     If ``manifest_path`` is set, it is used. Otherwise the path is
-    ``<shards_dir>/0000_manifest_p{ps:05d}.pkl`` with ``ps = p_steps`` or, when
+    ``<shards_dir>/graph_data_p{ps:05d}.h5`` with ``ps = p_steps`` or, when
     ``p_steps`` is omitted, ``DEFAULT_GRAPH_P_STEPS`` (1001, i.e. ``p01001``).
-    If that file is missing, callers must fail; we do not look for another manifest.
+    If that file is missing, callers must fail; we do not look for another p grid.
     """
     if manifest_path:
         return manifest_path
@@ -453,111 +432,62 @@ def load_tie_tables(
     return dict(iter_tie_tables(path, n_list, columns, require_all, progress=progress))
 
 
-def load_graph_data_from_shards(
+def load_graph_data(
     manifest_path: str | None = None,
     shards_dir: str = DEFAULT_GRAPH_SHARDS_DIR,
     p_steps: int | None = None,
     n_list: list[int] | None = None,
     require_all: bool = True,
 ) -> dict:
-    """Load graph-data shards and return grouped rows by n."""
-    resolved_manifest_path = _resolve_graph_manifest_path(manifest_path, p_steps, shards_dir)
-    if not os.path.isfile(resolved_manifest_path):
+    """Load the graph data (HDF5) for the requested n and return grouped rows by n.
+
+    ``manifest_path`` is the HDF5 file; if None it is ``<shards_dir>/graph_data_p<steps>.h5``.
+    Returns ``format``, ``n_min``, ``n_max`` (of the file), ``p_steps``, ``p_half_start``,
+    ``p_values`` (float32), ``rows_by_n[n]`` = {``y``, ``perm``, ``expected_sorted_by_p``} and
+    ``manifest_path``.
+    """
+    import h5py
+
+    path = _resolve_graph_manifest_path(manifest_path, p_steps, shards_dir)
+    if not os.path.isfile(path):
         want_ps = int(p_steps) if p_steps is not None else DEFAULT_GRAPH_P_STEPS
         raise FileNotFoundError(
-            f"Graph shard manifest not found for p_steps={want_ps} (no other manifest is tried): "
-            f"{os.path.abspath(resolved_manifest_path)}"
+            f"Graph data file not found for p_steps={want_ps} (no other p grid is tried): "
+            f"{os.path.abspath(path)}.  Build it with: python OBDsaveSourceData.py --save-graph-data"
         )
-    with open(resolved_manifest_path, "rb") as f:
-        manifest = pickle.load(f)
-
-    if not isinstance(manifest, dict):
-        raise ValueError(
-            f"Invalid graph-shard manifest payload in {resolved_manifest_path!r}: expected dict."
-        )
-    if manifest.get("format") != GRAPH_MANIFEST_FORMAT:
-        raise ValueError(
-            f"Unsupported graph-shard manifest format in {resolved_manifest_path!r}: {manifest.get('format')!r}."
-        )
-
-    n_entries = manifest.get("n_entries", {})
-    if not isinstance(n_entries, dict):
-        raise ValueError(
-            f"Invalid n_entries in graph-shard manifest {resolved_manifest_path!r}: expected dict."
-        )
-
-    if n_list is None:
-        target_ns = sorted(int(k) for k in n_entries.keys())
-    else:
-        target_ns = [int(n) for n in n_list]
-
-    rows_by_n: dict[int, dict[str, np.ndarray]] = {}
-    for n in target_ns:
-        entry = n_entries.get(str(n))
-        if not isinstance(entry, dict):
-            if require_all:
-                raise ValueError(
-                    f"Missing graph-shard manifest entry for n={n} in {resolved_manifest_path!r}."
-                )
-            continue
-
-        shard_ref = str(entry.get("shard_path", ""))
-        if not shard_ref:
-            if require_all:
-                raise ValueError(
-                    f"Missing shard_path for n={n} in graph-shard manifest {resolved_manifest_path!r}."
-                )
-            continue
-
-        shard_path = _resolve_manifest_shard_path(resolved_manifest_path, shard_ref)
-        if not os.path.exists(shard_path):
-            if require_all:
-                raise FileNotFoundError(
-                    f"Graph shard file not found for n={n}: {shard_path!r} (from {resolved_manifest_path!r})."
-                )
-            continue
-
-        with open(shard_path, "rb") as f:
-            shard_payload = pickle.load(f)
-
-        if not isinstance(shard_payload, dict):
-            if require_all:
-                raise ValueError(f"Invalid graph shard payload for n={n}: {shard_path!r}.")
-            continue
-        if shard_payload.get("format") != GRAPH_SHARD_FORMAT:
-            if require_all:
-                raise ValueError(
-                    f"Unsupported graph shard format for n={n}: {shard_payload.get('format')!r}."
-                )
-            continue
-        if (
-            "y" not in shard_payload
-            or "perm" not in shard_payload
-            or "expected_sorted_by_p" not in shard_payload
-        ):
-            if require_all:
-                raise ValueError(
-                    f"Graph shard payload missing required keys for n={n}: {shard_path!r}."
-                )
-            continue
-
-        rows_by_n[n] = {
-            "y": np.asarray(shard_payload["y"]),
-            "perm": np.asarray(shard_payload["perm"]),
-            "expected_sorted_by_p": np.asarray(shard_payload["expected_sorted_by_p"]),
-        }
-
-    p_values = np.asarray(manifest.get("p_values", []), dtype=np.float32)
+    with h5py.File(path, "r") as h:
+        fmt = h.attrs.get("format")
+        if fmt != GRAPH_FORMAT:
+            raise ValueError(
+                f"Unsupported graph data format in {path!r}: {fmt!r} (expected {GRAPH_FORMAT!r}). "
+                "Rebuild it with: python OBDsaveSourceData.py --save-graph-data"
+            )
+        p_values = np.asarray(h["p_values"][()], dtype=np.float32)
+        available = sorted(int(name[1:]) for name in h.keys() if name.startswith("n"))
+        target_ns = available if n_list is None else [int(n) for n in n_list]
+        rows_by_n: dict[int, dict[str, np.ndarray]] = {}
+        for n in target_ns:
+            g = h.get(_graph_group_name(n))
+            if g is None:
+                if require_all:
+                    raise ValueError(f"No graph data for n={n} in {path!r}.")
+                continue
+            rows_by_n[n] = {k: g[k][()] for k in ("y", "perm", "expected_sorted_by_p")}
+    ps = int(p_values.size)
     return {
-        "format": GRAPH_MANIFEST_FORMAT,
-        "n_min": int(manifest.get("n_min", min(rows_by_n) if rows_by_n else 0)),
-        "n_max": int(manifest.get("n_max", max(rows_by_n) if rows_by_n else -1)),
-        "p_steps": int(manifest.get("p_steps", len(p_values))),
-        "p_half_start": int((int(manifest.get("p_steps", len(p_values))) - 1) // 2),
+        "format": GRAPH_FORMAT,
+        "n_min": int(available[0]) if available else 0,
+        "n_max": int(available[-1]) if available else -1,
+        "p_steps": ps,
+        "p_half_start": int((ps - 1) // 2),
         "p_values": p_values,
         "rows_by_n": rows_by_n,
-        "manifest_path": resolved_manifest_path,
+        "manifest_path": path,
     }
+
+
+def _graph_group_name(n: int) -> str:
+    return f"n{int(n):05d}"
 
 
 def load_cusp_table(
@@ -875,7 +805,17 @@ def save_graph_data(
     save_every: int = 20,
     verbose: bool = False,
 ) -> None:
-    """Precompute graph data into per-n shards with a manifest."""
+    """Precompute the graph data for n_min..n_max into one uncompressed HDF5 file.
+
+    ``path`` defaults to ``<shards_dir>/graph_data_p<steps>.h5``.  Layout: file attributes
+    ``format``, ``p_steps``, ``created_at``, ``updated_at``, ``obd_core_version``; dataset
+    ``p_values`` (float32); one group ``nNNNNN`` per n with ``y`` (p_steps x n+1 float32, the
+    masses), ``perm`` (p_steps x n+1 uint16, their stable argsort) and ``expected_sorted_by_p``
+    (float64, E from obd_core).  An n already in the file is skipped; a file in another format is
+    rebuilt.  The file is flushed every ``save_every`` computed n.
+    """
+    import h5py
+
     if n_min > n_max:
         raise ValueError("n_min must be <= n_max")
     if p_steps < 2:
@@ -885,196 +825,94 @@ def save_graph_data(
 
     path = _resolve_graph_manifest_path(path, int(p_steps), shards_dir)
     _ensure_parent_dir(path)
-    os.makedirs(shards_dir, exist_ok=True)
     p_values = np.linspace(0.0, 1.0, int(p_steps), dtype=np.float32)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    manifest: dict = {}
-    try:
-        with open(path, "rb") as f:
-            manifest = pickle.load(f)
-    except FileNotFoundError:
-        manifest = {}
-    except (EOFError, pickle.UnpicklingError) as e:
-        print(
-            f"WARNING: Could not read existing graph shard manifest {path!r} ({e}). "
-            "Starting from empty graph-shard data."
-        )
-        manifest = {}
-    except Exception:
-        raise
+    mode = "a"
+    if os.path.exists(path):
+        try:
+            with h5py.File(path, "r") as h:
+                ok = h.attrs.get("format") == GRAPH_FORMAT and int(h.attrs.get("p_steps", -1)) == int(p_steps)
+        except OSError as e:
+            print(f"WARNING: could not read {path!r} ({e}); rebuilding it.")
+            ok = False
+        if not ok:
+            mode = "w"
+    with h5py.File(path, mode) as h:
+        if "format" not in h.attrs:
+            h.attrs["format"] = GRAPH_FORMAT
+            h.attrs["p_steps"] = int(p_steps)
+            h.attrs["created_at"] = now
+            h.create_dataset("p_values", data=p_values)
+        h.attrs["obd_core_version"] = OBD_CORE_VERSION
 
-    if not isinstance(manifest, dict):
-        manifest = {}
-    if manifest.get("format") != GRAPH_MANIFEST_FORMAT:
-        manifest = {
-            "format": GRAPH_MANIFEST_FORMAT,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "p_steps": int(p_steps),
-            "p_values": p_values,
-            "n_min": int(n_min),
-            "n_max": int(n_max),
-            "shards_dir": os.path.abspath(shards_dir),
-            "n_entries": {},
-        }
-    else:
-        manifest_p_steps = int(manifest.get("p_steps", -1))
-        if manifest_p_steps != int(p_steps):
-            raise ValueError(
-                f"Graph shard manifest p_steps={manifest_p_steps} does not match requested p_steps={p_steps}."
-            )
-        manifest["p_values"] = p_values
-
-    manifest.setdefault("n_entries", {})
-    manifest["shards_dir"] = os.path.abspath(shards_dir)
-    n_entries = manifest["n_entries"]
-
-    def _checkpoint_write_manifest() -> float:
-        t_write0 = time.perf_counter()
-        manifest["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        _atomic_pickle_dump(path, manifest)
-        return time.perf_counter() - t_write0
-
-    t_total = time.perf_counter()
-    n_computed = 0
-    n_skipped = 0
-    n_since_save = 0
-    n_manifest_writes = 0
-    manifest_dirty = False
-
-    def _print_verbose_header() -> None:
-        print("n   compute_sec  write_sec  iter_total  p_points  k_count")
-        print("-" * 66)
-
-    if verbose:
-        _print_verbose_header()
-
-    for n in range(n_min, n_max + 1):
-        entry = n_entries.get(str(int(n)))
-        shard_ok = False
-        if isinstance(entry, dict):
-            shard_ref = str(entry.get("shard_path", ""))
-            shard_p_steps = int(entry.get("p_steps", -1))
-            shard_k_count = int(entry.get("k_count", -1))
-            if shard_ref and shard_p_steps == int(p_steps) and shard_k_count == int(n + 1):
-                shard_path_existing = _resolve_manifest_shard_path(path, shard_ref)
-                shard_ok = os.path.exists(shard_path_existing)
-        if shard_ok:
-            n_skipped += 1
-            continue
-
-        t0 = time.perf_counter()
-        y_arr = np.empty((int(p_steps), int(n + 1)), dtype=np.float32)
-        perm_arr = np.empty((int(p_steps), int(n + 1)), dtype=np.uint16)
-        ks_arr = np.arange(n + 1, dtype=np.float64)
-        n_float = float(n)
-        n_minus_ks_arr = n_float - ks_arr
-        log_coeff = gammaln(n_float + 1.0) - gammaln(ks_arr + 1.0) - gammaln(n_minus_ks_arr + 1.0)
-        for p_idx, p in enumerate(p_values):
-            p_f = float(p)
-            if p_f <= 0.0:
-                pmf = np.zeros(n + 1, dtype=np.float64)
-                pmf[0] = 1.0
-            elif p_f >= 1.0:
-                pmf = np.zeros(n + 1, dtype=np.float64)
-                pmf[-1] = 1.0
-            else:
-                log_pmf = log_coeff + (ks_arr * math.log(p_f)) + (n_minus_ks_arr * math.log(1.0 - p_f))
-                m = float(np.max(log_pmf))
-                w = np.exp(log_pmf - m)
-                s = float(np.sum(w))
-                if s <= 0.0 or not np.isfinite(s):
-                    pmf = np.zeros(n + 1, dtype=np.float64)
-                    pmf[int(round(n_float * p_f))] = 1.0
-                else:
-                    pmf = w / s
-            y_arr[p_idx, :] = pmf.astype(np.float32)
-            perm_idx = np.argsort(pmf, kind="stable")
-            perm_arr[p_idx, :] = perm_idx.astype(np.uint16)
-        # E itself from obd_core (same masses and ranking as the tie tables), not re-derived here
-        expected_sorted_arr, _, _ = obd_core.E_slopes_at(int(n), np.asarray(p_values, dtype=np.float64))
-        t_compute = time.perf_counter() - t0
-
-        t_write0 = time.perf_counter()
-        shard_path_abs = os.path.join(
-            os.path.abspath(shards_dir),
-            _graph_shard_filename_for_n(n, int(p_steps)),
-        )
-        _atomic_pickle_dump(
-            shard_path_abs,
-            {
-                "format": GRAPH_SHARD_FORMAT,
-                "n": int(n),
-                "p_steps": int(p_steps),
-                "y": y_arr,
-                "perm": perm_arr,
-                "expected_sorted_by_p": expected_sorted_arr,
-            },
-        )
-        manifest_parent = os.path.dirname(os.path.abspath(path)) or "."
-        shard_ref = os.path.relpath(shard_path_abs, start=manifest_parent)
-        n_entries[str(int(n))] = {
-            "n": int(n),
-            "shard_path": shard_ref,
-            "rows": int(p_steps),
-            "p_steps": int(p_steps),
-            "k_count": int(n + 1),
-            "dtype_y": "float32",
-            "dtype_perm": "uint16",
-            "dtype_expected_sorted": "float64",
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        manifest_dirty = True
-        n_since_save += 1
-        if n_since_save >= save_every:
-            t_manifest_write = _checkpoint_write_manifest()
-            n_since_save = 0
-            n_manifest_writes += 1
-            manifest_dirty = False
-            if verbose:
-                _print_verbose_header()
-            if not verbose:
-                print(
-                    "Checkpoint graph manifest write: "
-                    f"n={n}, computed={n_computed + 1}, skipped={n_skipped}, "
-                    f"writes={n_manifest_writes}, write_sec={t_manifest_write:.4f}"
-                )
-        t_write = time.perf_counter() - t_write0
-
-        n_computed += 1
+        t_total = time.perf_counter()
+        n_computed = 0
+        n_skipped = 0
         if verbose:
-            t_iter = t_compute + t_write
-            print(
-                f"{n:2}   {t_compute:10.4f}s  {t_write:9.4f}s  {t_iter:10.4f}s  "
-                f"{p_steps:8d}  {n + 1:7d}"
-            )
+            print("n      compute_sec  write_sec")
+            print("-" * 32)
+        for n in range(n_min, n_max + 1):
+            name = _graph_group_name(n)
+            if name in h:
+                n_skipped += 1
+                continue
 
-    if n_entries:
-        ns_avail = sorted(int(k) for k in n_entries.keys())
-        manifest["n_min"] = int(min(ns_avail))
-        manifest["n_max"] = int(max(ns_avail))
-    else:
-        manifest["n_min"] = int(n_min)
-        manifest["n_max"] = int(n_max)
+            t0 = time.perf_counter()
+            y_arr = np.empty((int(p_steps), int(n + 1)), dtype=np.float32)
+            perm_arr = np.empty((int(p_steps), int(n + 1)), dtype=np.uint16)
+            ks_arr = np.arange(n + 1, dtype=np.float64)
+            n_float = float(n)
+            n_minus_ks_arr = n_float - ks_arr
+            log_coeff = gammaln(n_float + 1.0) - gammaln(ks_arr + 1.0) - gammaln(n_minus_ks_arr + 1.0)
+            for p_idx, p in enumerate(p_values):
+                p_f = float(p)
+                if p_f <= 0.0:
+                    pmf = np.zeros(n + 1, dtype=np.float64)
+                    pmf[0] = 1.0
+                elif p_f >= 1.0:
+                    pmf = np.zeros(n + 1, dtype=np.float64)
+                    pmf[-1] = 1.0
+                else:
+                    log_pmf = log_coeff + (ks_arr * math.log(p_f)) + (n_minus_ks_arr * math.log(1.0 - p_f))
+                    m = float(np.max(log_pmf))
+                    w = np.exp(log_pmf - m)
+                    s = float(np.sum(w))
+                    if s <= 0.0 or not np.isfinite(s):
+                        pmf = np.zeros(n + 1, dtype=np.float64)
+                        pmf[int(round(n_float * p_f))] = 1.0
+                    else:
+                        pmf = w / s
+                y_arr[p_idx, :] = pmf.astype(np.float32)
+                perm_idx = np.argsort(pmf, kind="stable")
+                perm_arr[p_idx, :] = perm_idx.astype(np.uint16)
+            # E itself from obd_core (same masses and ranking as the tie tables), not re-derived here
+            expected_sorted_arr, _, _ = obd_core.E_slopes_at(int(n), np.asarray(p_values, dtype=np.float64))
+            t_compute = time.perf_counter() - t0
 
-    if manifest_dirty:
-        _checkpoint_write_manifest()
-        n_manifest_writes += 1
+            t_write0 = time.perf_counter()
+            g = h.create_group(name)
+            g.attrs["n"] = int(n)
+            g.attrs["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            g.create_dataset("y", data=y_arr)
+            g.create_dataset("perm", data=perm_arr)
+            g.create_dataset("expected_sorted_by_p", data=expected_sorted_arr)
+            n_computed += 1
+            if n_computed % save_every == 0:
+                h.attrs["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                h.flush()
+                if not verbose:
+                    print(f"Checkpoint graph data: n={n}, computed={n_computed}, skipped={n_skipped}", flush=True)
+            t_write = time.perf_counter() - t_write0
+            if verbose:
+                print(f"{n:5d}  {t_compute:11.4f}s {t_write:9.4f}s", flush=True)
+        h.attrs["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     elapsed = time.perf_counter() - t_total
-    if verbose:
-        print("-" * 66)
-    if n_computed == 0 and n_skipped == (n_max - n_min + 1):
-        print(
-            f"Graph data shards up to date ({n_max - n_min + 1} n values, all skipped) — "
-            f"manifest={path}, shards_dir={shards_dir}"
-        )
+    if n_computed == 0:
+        print(f"Graph data up to date ({n_max - n_min + 1} n values, all present) in {path}")
     else:
-        print(
-            f"Wrote graph data shards ({n_computed} n computed, {n_skipped} skipped, "
-            f"{n_manifest_writes} manifest writes, save_every={save_every}) "
-            f"to shards_dir={shards_dir} with manifest={path} in {elapsed:.2f}s"
-        )
+        print(f"Wrote graph data ({n_computed} n computed, {n_skipped} skipped) to {path} in {elapsed:.2f}s")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -1093,7 +931,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Save graph data and tie points for OBDgraphExplorer1: same defaults as "
             f"--save-graph-data (n={DEFAULT_GRAPH_N_MIN}..{DEFAULT_GRAPH_N_MAX}, "
             f"p_steps={DEFAULT_GRAPH_P_STEPS}), tie points for that same n range "
-            f"(writes graph manifest {DEFAULT_GRAPH_OUTPUT} and tie manifest {DEFAULT_TIE_OUTPUT}), "
+            f"(writes graph data {DEFAULT_GRAPH_OUTPUT} and tie manifest {DEFAULT_TIE_OUTPUT}), "
             f"then builds the cusp sidecar ({DEFAULT_CUSP_OUTPUT}). "
             "--tie-n-min / --tie-n-max are not used for the tie save. "
             "Equivalent to --save-graph-data, --save-tie-points over the graph n-range, then "
@@ -1188,14 +1026,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--save-graph-data",
         action="store_true",
-        help="Precompute binomial data for the graph explorer and save a pickle file.",
+        help="Precompute the graph data (masses, their ranking, E on a p grid) into one HDF5 file.",
     )
     p.add_argument(
         "--graph-output",
         default=None,
         metavar="PATH",
         help=(
-            "Output path for graph shard manifest. "
+            "Graph data file (HDF5). "
             f"Default is auto-derived from p_steps, e.g. {os.path.join(DEFAULT_GRAPH_SHARDS_DIR, _graph_manifest_filename_for_p_steps(DEFAULT_GRAPH_P_STEPS))}."
         ),
     )
@@ -1203,7 +1041,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--graph-shards-dir",
         default=DEFAULT_GRAPH_SHARDS_DIR,
         metavar="DIR",
-        help=f"Directory for per-n graph data shards (default: {DEFAULT_GRAPH_SHARDS_DIR}).",
+        help=f"Directory holding the graph data file (default: {DEFAULT_GRAPH_SHARDS_DIR}).",
     )
     p.add_argument(
         "--graph-save-every",
@@ -1211,7 +1049,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=20,
         metavar="K",
         help=(
-            "Checkpoint cadence for graph shard manifest writes: save after every K computed n values "
+            "Flush cadence for the graph data file: flush after every K computed n values "
             "(plus a final save)."
         ),
     )

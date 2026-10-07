@@ -37,7 +37,7 @@ def write_explorer5_html(
     if not tie_data:
         if verbose:
             print(
-                f"WARNING: No tie shard manifest at {man!r}; plot will be empty.\n",
+                f"WARNING: No tie manifest at {man!r}; plot will be empty.\n",
                 file=sys.stderr,
             )
     html = build_explorer5_html(tie_data, n_min=n_min, n_max=n_max, colorscale=colorscale)

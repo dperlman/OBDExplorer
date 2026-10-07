@@ -68,19 +68,25 @@ HEATMAP_PIXEL_MODE_CHOICES: tuple[str, ...] = ("exact", "annotated")
 
 
 def _effective_default_graph_shards_dir() -> str:
-    return os.path.join("data", "graph_data_shards")
+    from OBDsaveSourceData import DEFAULT_GRAPH_SHARDS_DIR
+
+    return DEFAULT_GRAPH_SHARDS_DIR
 
 
 def _effective_default_tie_manifest() -> str:
-    return os.path.join("data", "tie_points_shards", "0000_manifest.pkl")
+    from OBDsaveSourceData import DEFAULT_TIE_OUTPUT
+
+    return DEFAULT_TIE_OUTPUT
 
 
 def _effective_graph_manifest_for_cfg(cfg: dict[str, object]) -> str:
+    from OBDsaveSourceData import _graph_manifest_filename_for_p_steps
+
     shards_dir = cfg.get("graph_shards_dir")
     if not isinstance(shards_dir, str) or not shards_dir.strip():
         shards_dir = _effective_default_graph_shards_dir()
     p_steps = int(cfg.get("p_steps", DEFAULT_GRAPH_P_STEPS))
-    return os.path.join(shards_dir, f"0000_manifest_p{p_steps:05d}.pkl")
+    return os.path.join(shards_dir, _graph_manifest_filename_for_p_steps(p_steps))
 
 
 def _ensure_output_parent_dir(path: str) -> None:
@@ -371,8 +377,8 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
                     parse_p_steps,
                     "Must match a generated graph manifest (e.g. from OBDsave). Larger values can be very slow.",
                 ),
-                ("graph_manifest", "graph_manifest (or none)", _parse_opt_str, "Path to graph shard manifest."),
-                ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory containing graph shards/manifests."),
+                ("graph_manifest", "graph_manifest (or none)", _parse_opt_str, "Path to the graph data file (HDF5)."),
+                ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory holding the graph data file."),
             ]
         )
     if variant == 7:
@@ -400,7 +406,7 @@ def _interactive_html_configure_variant(variant: int) -> argparse.Namespace | No
         )
     fields.extend(
         [
-            ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to tie shard manifest."),
+            ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to the tie manifest (JSON)."),
         ]
     )
     if variant in (1, 5, 6, 7):
@@ -534,9 +540,9 @@ def _interactive_html_settings() -> argparse.Namespace | None:
 
 
 def _discover_available_graph_p_steps(cfg: dict[str, object]) -> tuple[int, ...]:
-    """Scan graph shard manifests and return discovered p_steps values.
+    """Scan for graph data files (graph_data_p<steps>.h5) and return the p_steps values found.
 
-    If no manifest files are present, fall back to known supported presets for now.
+    If none are present, fall back to known supported presets for now.
     """
     shards_dir = cfg.get("graph_shards_dir")
     if not isinstance(shards_dir, str) or not shards_dir.strip():
@@ -544,7 +550,7 @@ def _discover_available_graph_p_steps(cfg: dict[str, object]) -> tuple[int, ...]
     found: set[int] = set()
     if os.path.isdir(shards_dir):
         for name in os.listdir(shards_dir):
-            m = re.fullmatch(r"0000_manifest_p(\d+)\.pkl", name)
+            m = re.fullmatch(r"graph_data_p(\d+)\.h5", name)
             if m:
                 found.add(int(m.group(1)))
     if found:
@@ -718,7 +724,7 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
             "Use only n values that fall within graph (and tie) shards you already precomputed (e.g. with OBDsave); "
             "missing shards will fail at runtime. Smallest allowed n_min is 2. Must satisfy n_min <= n_max.",
         ),  # o
-        ("graph_manifest", "graph_manifest (or none)", _parse_opt_str, "Path to graph shard manifest; none uses default manifest for p_steps."),  # p
+        ("graph_manifest", "graph_manifest (or none)", _parse_opt_str, "Path to the graph data file (HDF5); none uses the default for p_stepst for p_steps."),  # p
         (
             "p_steps",
             'p_steps ("1001"|"10001")',
@@ -733,7 +739,7 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
             "Viewport p window: full=[0,1], left=[0,0.5], right=[0.5,1]. "
             "Case-insensitive; non-empty prefixes work (f, fu, l, ri, …).",
         ),  # r
-        ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory containing graph shard files/manifests."),  # s
+        ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory holding the graph data file."),  # s
         (
             "tie_direction",
             'tie_direction ("up"|"down")',
@@ -745,7 +751,7 @@ def _interactive_export_settings(fmt: str) -> argparse.Namespace | None:
         ("width_in", "width (in)", float, "Export width in inches (used for png/pdf/svg)."),  # w
         ("graph_line_px", "graph_line_px", float, "Graph line width in device pixels."),  # x
         ("height_in", "height (in)", float, "Export height in inches (used for png/pdf/svg)."),  # y
-        ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to tie shard manifest."),  # z
+        ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to the tie manifest (JSON)."),  # z
         ("tie_to_border", 'tie_to_border ("yes"|"no")', _parse_bool, "Extend tie lines to viewport border when true."),  # 0
         ("tie_opacity", "tie_opacity", float, "Base opacity for tie lines."),  # 1
         ("tie_opacity_k", "tie_opacity_k", float, "Tie opacity slope factor across n."),  # 2
@@ -874,8 +880,8 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             "Matplotlib colormap name used for heatmap colors.",
         ),
         ("dpi", "dpi", int, "Export dots-per-inch (png)."),
-        ("graph_manifest", "graph_manifest (or none)", _parse_opt_str, "Path to graph shard manifest; none uses default manifest for p_steps."),
-        ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory containing graph shard files/manifests."),
+        ("graph_manifest", "graph_manifest (or none)", _parse_opt_str, "Path to the graph data file (HDF5); none uses the default for p_stepst for p_steps."),
+        ("graph_shards_dir", "graph_shards_dir (or none)", _parse_opt_str, "Directory holding the graph data file."),
         ("legend", 'legend ("yes"|"no")', _parse_bool, "Show heatmap color legend (colorbar)."),
         (
             "trim_color_range_percent",
@@ -894,7 +900,7 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             "n_max",
             "n_max",
             int,
-            "Upper n bound. Must satisfy n_min <= n_max and be covered by graph shards.",
+            "Upper n bound. Must satisfy n_min <= n_max and be covered by the graph data.",
         ),
         (
             "n_min",
@@ -1066,7 +1072,7 @@ def _interactive_tie_heatmap_export_settings() -> argparse.Namespace | None:
             "Matplotlib colormap name used for heatmap colors.",
         ),
         ("dpi", "dpi", int, "Export dots-per-inch (png)."),
-        ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to tie shard manifest."),
+        ("tie_manifest", "tie_manifest (or none)", _parse_opt_str, "Path to the tie manifest (JSON)."),
         ("legend", 'legend ("yes"|"no")', _parse_bool, "Show heatmap color legend (colorbar)."),
         (
             "trim_color_range_percent",
@@ -1422,9 +1428,9 @@ def _add_data_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--n-min", type=int, default=2)
     p.add_argument("--n-max", type=int, default=100)
     p.add_argument("--p-steps", type=int, default=DEFAULT_GRAPH_P_STEPS)
-    p.add_argument("--graph-manifest", default=None, help="Graph shard manifest path.")
+    p.add_argument("--graph-manifest", default=None, help="Graph data file (HDF5).")
     p.add_argument("--graph-shards-dir", default=None)
-    p.add_argument("--tie-manifest", default=None, help="Tie shard manifest path.")
+    p.add_argument("--tie-manifest", default=None, help="Tie manifest (JSON) path.")
 
 
 def _interactive() -> None:
@@ -1578,7 +1584,7 @@ def main() -> None:
     p_exp.add_argument("--height-in", type=float, default=8.0)
     p_exp.add_argument("--dpi", type=int, default=400)
 
-    p_hm = sub.add_parser("heatmap", help="N-p heatmap export (graph shards, PNG).")
+    p_hm = sub.add_parser("heatmap", help="N-p heatmap export (PNG).")
     p_hm.add_argument("-o", "--output", required=True)
     p_hm.add_argument("--format", choices=("png",), default="png")
     p_hm.add_argument(
@@ -1592,7 +1598,7 @@ def main() -> None:
     p_hm.add_argument("--p-steps", type=int, default=DEFAULT_GRAPH_P_STEPS)
     p_hm.add_argument("--p-min", type=float, default=0.5)
     p_hm.add_argument("--p-max", type=float, default=0.6)
-    p_hm.add_argument("--graph-manifest", default=None, help="Graph shard manifest path.")
+    p_hm.add_argument("--graph-manifest", default=None, help="Graph data file (HDF5).")
     p_hm.add_argument("--graph-shards-dir", default=None)
     p_hm.add_argument(
         "--value",
@@ -1631,7 +1637,7 @@ def main() -> None:
         "--verbose",
         action="store_true",
         default=False,
-        help="Print progress every 10 loaded graph shards.",
+        help="Print progress every 10 values of n.",
     )
     p_hm.add_argument("--width-in", type=float, default=12.0)
     p_hm.add_argument("--height-in", type=float, default=10.0)
@@ -1648,7 +1654,7 @@ def main() -> None:
     )
     p_thm.add_argument("--n-min", type=int, default=2)
     p_thm.add_argument("--n-max", type=int, default=1000)
-    p_thm.add_argument("--tie-manifest", default=None, help="Tie shard manifest path.")
+    p_thm.add_argument("--tie-manifest", default=None, help="Tie manifest (JSON) path.")
     p_thm.add_argument(
         "--value",
         default="d",
