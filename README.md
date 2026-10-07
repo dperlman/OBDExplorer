@@ -51,7 +51,14 @@ columns.
 
 The tie values come from OBD-core and are exact: one-sided slopes from the ranking, the slope
 jump as `log10_D`, and cusp flags proved by interval arithmetic where double precision is not
-enough. Never recompute a slope jump as `slope_right - slope_left`: for most tie points it is far
+enough. Every rebuild checks each new table on all rows against bounds proved from the
+definitions, then samples a few against OBD-core's rigorous reference. To check what's on disk
+at any time (about 10 s):
+
+```bash
+python OBDsaveSourceData.py --check-tie-points
+```
+ Never recompute a slope jump as `slope_right - slope_left`: for most tie points it is far
 below double precision. Use `log10_D`.
 
 ## Rebuilding the published site
