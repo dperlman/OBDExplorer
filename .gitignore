@@ -6,6 +6,9 @@
 /plots/*
 !/plots/.gitkeep
 /plots_old/
+# Run logs written by OBDsaveSourceData.py on every rebuild (timings and counts per n).
+# The 26 logs committed before 2026-10-07 stay tracked; new ones stay local.
+/log/*.csv
 
 # Python
 __pycache__/
