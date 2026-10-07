@@ -2,6 +2,7 @@ import argparse
 import concurrent.futures as cf
 import csv
 from datetime import datetime
+import json
 import math
 import os
 import pickle
@@ -26,25 +27,31 @@ DEFAULT_GRAPH_N_MIN = 2
 DEFAULT_GRAPH_N_MAX = 1000
 DEFAULT_GRAPH_P_STEPS = 1001
 DATA_DIR = "data"
-DEFAULT_TIE_SHARDS_DIR = os.path.join(DATA_DIR, "tie_points_shards")
-DEFAULT_TIE_MANIFEST_FILENAME = "0000_manifest.pkl"
+DEFAULT_TIE_SHARDS_DIR = os.path.join(DATA_DIR, "tie_points")
+DEFAULT_TIE_MANIFEST_FILENAME = "manifest.json"
 DEFAULT_TIE_OUTPUT = os.path.join(DEFAULT_TIE_SHARDS_DIR, DEFAULT_TIE_MANIFEST_FILENAME)
-DEFAULT_CUSP_OUTPUT = os.path.join(DATA_DIR, "tieCuspSlopes.pkl")
+DEFAULT_CUSP_OUTPUT = os.path.join(DATA_DIR, "tie_cusps.parquet")
 DEFAULT_GRAPH_SHARDS_DIR = os.path.join(DATA_DIR, "graph_data_shards")
 DEFAULT_GRAPH_SHARDS_MANIFEST = os.path.join(
     DEFAULT_GRAPH_SHARDS_DIR, f"0000_manifest_p{DEFAULT_GRAPH_P_STEPS:05d}.pkl"
 )
 DEFAULT_GRAPH_OUTPUT = DEFAULT_GRAPH_SHARDS_MANIFEST
-DEFAULT_SLOPE_OUTPUT = os.path.join(DATA_DIR, "slope_data.pkl")
 LOG_DIR = "log"
 DEFAULT_WORKERS = 8
 
-# Shard formats.  v2 (2026-10-05) replaced the finite-difference tie slopes of v1, which were wrong
-# (negative slope jumps at most tie points, missed and mislabelled cusps), with exact ones from
-# obd_core; v1 files are refused rather than read.
-TIE_MANIFEST_FORMAT = "obd.tie_points_slope.shards.v2"
-TIE_SHARD_FORMAT = "obd.tie_points_slope.n_shard.v2"
-CUSP_FORMAT = "obd.tie_cusp_slopes.v4"
+# Tie-point storage.  Parquet since 2026-10-06 (one table per n plus a JSON manifest; before that,
+# pickled lists of dicts).  The pickle formats are refused rather than read: v1 (before 2026-10-05)
+# held finite-difference tie slopes that were wrong -- negative slope jumps at most tie points,
+# missed and mislabelled cusps.
+TIE_FORMAT = "obd.tie_points.parquet.v3"
+CUSP_FORMAT = "obd.tie_cusps.parquet.v5"
+# Graph shards v3 (2026-10-06): E from obd_core in float64; the np.gradient slope of v2 is gone
+# (the heatmap computes exact slopes with obd_core.E_slopes_at instead).
+GRAPH_MANIFEST_FORMAT = "obd.graph_data.shards.v3"
+GRAPH_SHARD_FORMAT = "obd.graph_data.n_shard.v3"
+TIE_COLUMNS: tuple[str, ...] = (
+    "p", "i", "j", "E", "slope_left", "slope_right", "log10_D", "is_cusp", "decided_by",
+)
 try:
     from importlib.metadata import version as _pkg_version
 
@@ -79,7 +86,7 @@ def _atomic_pickle_dump(path: str, payload: dict) -> None:
 
 
 def _tie_shard_filename_for_n(n: int) -> str:
-    return f"tie_points_n{int(n):04d}.pkl"
+    return os.path.join(f"n={int(n):05d}", "part.parquet")
 
 
 def _graph_shard_filename_for_n(n: int, p_steps: int) -> str:
@@ -115,7 +122,7 @@ def _resolve_manifest_shard_path(manifest_path: str, shard_ref: str) -> str:
 # Which n to run when n_list is None (e.g. print_*_table, save_tie_points); matches CLI tie defaults
 N_LIST = list(range(DEFAULT_TIE_N_MIN, DEFAULT_TIE_N_MAX + 1))
 
-# Symbolic tie math (all_tie_points_exact) is used only in print_comparison_table—not when saving pickles.
+# Symbolic tie math (all_tie_points_exact) is used only in print_comparison_table, not when saving data.
 
 
 def _canonical_center_pair_ij(n: int) -> tuple[int, int]:
@@ -179,17 +186,14 @@ def all_tie_points(n: int) -> np.ndarray:
     return np.array([p for p, _ in recs], dtype=float)
 
 
-def _tie_records_for_n(
-    n: int,
-) -> tuple[list[tuple[float, list[tuple[int, int]]]], list[dict], dict[str, int]]:
-    """Every tie point of ``n`` with exact slopes and certified cusp verdicts, from ``obd_core``.
+def _tie_table_for_n(n: int) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+    """Every tie point of ``n`` (both halves, sorted by ``p``) as columns, from ``obd_core``.
 
-    Returns ``(recs, slope_recs, stats)``. ``recs`` is ``[(p, [(i, j)])]`` sorted by ``p``, the same
-    layout as ``all_tie_points_float_with_pairs``: the mirror pairs ``i + j == n`` share the one
-    center tie ``p = 1/2``, labelled with the canonical pair. ``slope_recs[k]`` belongs to
-    ``recs[k]``:
+    Columns (see ``TIE_COLUMNS``):
 
-    - ``p``, ``expected_sorted``: the tie point and E(n, p) there.
+    - ``p``: the tie point; ``i``, ``j``: its pair. The mirror pairs ``i + j == n`` share the one
+      center tie ``p = 1/2``, which carries the canonical pair (``_canonical_center_pair_ij``).
+    - ``E``: E(n, p) at the tie point.
     - ``slope_left``, ``slope_right``: the exact one-sided slopes E'_- and E'_+ (from the ranking
       just left of the tie, not finite differences).
     - ``log10_D``: log10 of the slope jump D = E'_+ - E'_- > 0, computed from the pair mass and so
@@ -200,43 +204,95 @@ def _tie_records_for_n(
     - ``decided_by``: ``double``, ``iv50``/``iv100``/``iv200``, ``exact`` (adjacent pairs, rational
       p*), ``symmetry`` (the center tie) or ``UNRESOLVED``.
 
-    ``stats`` has ``n_checked`` (tie points that needed interval arithmetic) and ``n_unresolved``.
+    Also returns ``stats``: ``n_checked`` (tie points that needed interval or exact arithmetic) and
+    ``n_unresolved``.
     """
     ni = int(n)
     t = obd_core.tie_table(ni, both_halves=True)
-    center_pair = _canonical_center_pair_ij(ni)
-    recs: list[tuple[float, list[tuple[int, int]]]] = []
-    slope_recs: list[dict] = []
-    for i, j, p, e, sl, sr, ld, cusp, how in zip(
-        t["i"].tolist(),
-        t["j"].tolist(),
-        t["pstar"].tolist(),
-        t["E"].tolist(),
-        t["slope_left"].tolist(),
-        t["slope_right"].tolist(),
-        t["log10_D"].tolist(),
-        t["is_cusp"].tolist(),
-        t["decided_by"].tolist(),
-    ):
-        pair = center_pair if (i, j) == (0, ni) else (int(i), int(j))
-        recs.append((float(p), [pair]))
-        slope_recs.append(
-            {
-                "p": float(p),
-                "expected_sorted": float(e),
-                "slope_left": float(sl),
-                "slope_right": float(sr),
-                "log10_D": float(ld),
-                "is_cusp": bool(cusp),
-                "decided_by": str(how),
-            }
-        )
-    decided = t["decided_by"]
+    i = t["i"].astype(np.int16)
+    j = t["j"].astype(np.int16)
+    center = (t["i"] == 0) & (t["j"] == ni)
+    ci, cj = _canonical_center_pair_ij(ni)
+    i[center] = ci
+    j[center] = cj
+    decided = np.asarray(t["decided_by"], dtype=object)
+    table = {
+        "p": t["pstar"].astype(np.float64),
+        "i": i,
+        "j": j,
+        "E": t["E"].astype(np.float64),
+        "slope_left": t["slope_left"].astype(np.float64),
+        "slope_right": t["slope_right"].astype(np.float64),
+        "log10_D": t["log10_D"].astype(np.float64),
+        "is_cusp": t["is_cusp"].astype(bool),
+        "decided_by": decided,
+    }
     stats = {
         "n_checked": int(sum(1 for d in decided if d.startswith("iv") or d in ("exact", "UNRESOLVED"))),
         "n_unresolved": int(sum(1 for d in decided if d == "UNRESOLVED")),
     }
-    return recs, slope_recs, stats
+    return table, stats
+
+
+def tie_center_index(table: dict[str, np.ndarray]) -> int:
+    """Row index of the center tie ``p = 1/2`` in a per-n tie table (it is stored as exactly 0.5)."""
+    hit = np.flatnonzero(table["p"] == 0.5)
+    if hit.size != 1:
+        raise ValueError(f"tie table has {hit.size} rows at p = 1/2; expected exactly one")
+    return int(hit[0])
+
+
+def _write_tie_parquet(path: str, n: int, table: dict[str, np.ndarray]) -> None:
+    """One n's tie table as Parquet: zstd, BYTE_STREAM_SPLIT on the floats, no dictionary pages.
+
+    Same settings as the ordered-binomial-cusps plotting datasets (dictionary encoding defeats
+    BYTE_STREAM_SPLIT); ``decided_by`` is the one column stored as an Arrow dictionary.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    cols = {
+        "p": pa.array(table["p"]),
+        "i": pa.array(table["i"]),
+        "j": pa.array(table["j"]),
+        "E": pa.array(table["E"]),
+        "slope_left": pa.array(table["slope_left"]),
+        "slope_right": pa.array(table["slope_right"]),
+        "log10_D": pa.array(table["log10_D"]),
+        "is_cusp": pa.array(table["is_cusp"]),
+        "decided_by": pa.array(list(table["decided_by"]), type=pa.string()).dictionary_encode(),
+    }
+    tbl = pa.table(cols).replace_schema_metadata(
+        {b"format": TIE_FORMAT.encode(), b"n": str(int(n)).encode(), b"obd_core_version": OBD_CORE_VERSION.encode()}
+    )
+    _ensure_parent_dir(path)
+    tmp = path + ".tmp"
+    pq.write_table(
+        tbl,
+        tmp,
+        compression="zstd",
+        use_dictionary=False,
+        use_byte_stream_split=[k for k in tbl.column_names if pa.types.is_floating(tbl.schema.field(k).type)],
+    )
+    os.replace(tmp, path)
+
+
+def _read_tie_parquet(path: str, columns: list[str] | tuple[str, ...] | None = None) -> dict[str, np.ndarray]:
+    import pyarrow.parquet as pq
+
+    tbl = pq.read_table(path, columns=list(columns) if columns is not None else None)
+    return {name: _column_to_numpy(tbl.column(name)) for name in tbl.column_names}
+
+
+def _column_to_numpy(col) -> np.ndarray:
+    """Arrow column -> numpy; a dictionary (string) column becomes an object array via its codes."""
+    import pyarrow as pa
+
+    arr = col.combine_chunks()
+    if pa.types.is_dictionary(arr.type):
+        labels = np.asarray(arr.dictionary.to_pylist(), dtype=object)
+        return labels[arr.indices.to_numpy(zero_copy_only=False)]
+    return arr.to_numpy(zero_copy_only=False)
 
 
 def all_tie_points_exact(n: int) -> tuple[np.ndarray, list, list[list[tuple[int, int]]]]:
@@ -320,189 +376,81 @@ def print_comparison_table(n_list: list[int] | None = None, atol: float = 1e-9) 
         print(f"n={n}: {symbolic_by_n[n]}")
 
 
-def _check_tie_manifest_format(manifest: dict, path: str) -> None:
-    fmt = manifest.get("format")
-    if fmt == TIE_MANIFEST_FORMAT:
-        return
-    hint = ""
-    if fmt == "obd.tie_points_slope.shards.v1":
-        hint = (
-            " v1 shards hold finite-difference tie slopes that are wrong (negative slope jumps,"
-            " missed cusps); rebuild them with: python OBDsaveSourceData.py --save-tie-points"
+def _atomic_json_dump(path: str, payload: dict) -> None:
+    _ensure_parent_dir(path)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=1, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def load_tie_manifest(path: str = DEFAULT_TIE_OUTPUT) -> dict:
+    """The tie-point manifest (JSON). Raises on anything but the current format."""
+    if path.endswith(".pkl"):
+        raise ValueError(
+            f"{path!r} is a pickle tie manifest from before 2026-10-06; the tie points now live in "
+            f"Parquet under {DEFAULT_TIE_SHARDS_DIR!r}. Rebuild with: python OBDsaveSourceData.py --save-tie-points"
         )
-    raise ValueError(f"Unsupported tie manifest format in {path!r}: {fmt!r}.{hint}")
+    with open(path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    if not isinstance(manifest, dict) or manifest.get("format") != TIE_FORMAT:
+        fmt = manifest.get("format") if isinstance(manifest, dict) else None
+        raise ValueError(f"Unsupported tie manifest format in {path!r}: {fmt!r} (expected {TIE_FORMAT!r}).")
+    return manifest
 
 
-def load_tie_points_from_shards(
+def iter_tie_tables(
     path: str = DEFAULT_TIE_OUTPUT,
     n_list: list[int] | None = None,
+    columns: list[str] | tuple[str, ...] | None = None,
     require_all: bool = True,
     *,
     progress: int | None = None,
-) -> dict:
-    """Load tie-point data from shard manifest and rebuild monolithic dict structure.
-
-    Returns a dict with keys:
-      - float_by_n
-      - float_with_pairs_by_n
-      - tie_slope_by_n
-
-    If ``n_list`` is provided, only those n values are loaded. If ``require_all`` is True,
-    raises when requested n is missing from the manifest or shard file.
-
-    If ``progress`` is a positive integer ``N``, prints timing on stderr every ``N`` processed
-    ``n`` values (and on the last). ``None`` or ``0`` disables progress reporting.
-    """
-    float_by_n: dict[int, np.ndarray] = {}
-    float_with_pairs_by_n: dict[int, list[tuple[float, list[tuple[int, int]]]]] = {}
-    tie_slope_by_n: dict[int, list[dict]] = {}
-    for n, n_payload in iter_tie_points_from_shards(
-        path=path,
-        n_list=n_list,
-        require_all=require_all,
-        progress=progress,
-        include_float_by_n=True,
-        include_float_with_pairs_by_n=True,
-        include_tie_slope_by_n=True,
-    ):
-        float_by_n[n] = n_payload["float_by_n"]
-        float_with_pairs_by_n[n] = n_payload["float_with_pairs_by_n"]
-        tie_slope_by_n[n] = n_payload["tie_slope_by_n"]
-
-    return {
-        "float_by_n": float_by_n,
-        "float_with_pairs_by_n": float_with_pairs_by_n,
-        "tie_slope_by_n": tie_slope_by_n,
-    }
-
-
-def iter_tie_points_from_shards(
-    path: str = DEFAULT_TIE_OUTPUT,
-    n_list: list[int] | None = None,
-    require_all: bool = True,
-    *,
-    progress: int | None = None,
-    include_float_by_n: bool = False,
-    include_float_with_pairs_by_n: bool = True,
-    include_tie_slope_by_n: bool = True,
 ):
-    """Yield tie-point shard payload one ``n`` at a time.
+    """Yield ``(n, table)`` for each requested ``n``, one n at a time.
 
-    Each yielded item is ``(n, payload_for_n)`` where ``payload_for_n`` only includes
-    requested keys (from ``float_by_n``, ``float_with_pairs_by_n``, ``tie_slope_by_n``).
-    This allows callers to stream over shards without keeping the full manifest payload
-    resident in RAM.
+    ``table`` maps column name -> numpy array, rows sorted by ``p`` (see ``_tie_table_for_n`` for the
+    columns). ``columns`` restricts what is read (Parquet reads only those columns). Missing ``n``
+    raise when ``require_all``, else are skipped. ``progress=N`` prints timing every N values of n.
     """
-    if (
-        not include_float_by_n
-        and not include_float_with_pairs_by_n
-        and not include_tie_slope_by_n
-    ):
-        raise ValueError("iter_tie_points_from_shards: at least one include_* flag must be True.")
-
-    with open(path, "rb") as f:
-        manifest = pickle.load(f)
-
-    if not isinstance(manifest, dict):
-        raise ValueError(f"Invalid tie manifest payload in {path!r}: expected dict.")
-    _check_tie_manifest_format(manifest, path)
-
+    manifest = load_tie_manifest(path)
     n_entries = manifest.get("n_entries", {})
-    if not isinstance(n_entries, dict):
-        raise ValueError(f"Invalid n_entries in manifest {path!r}: expected dict.")
-
-    if n_list is None:
-        target_ns = sorted(int(k) for k in n_entries.keys())
-    else:
-        target_ns = [int(n) for n in n_list]
-
-    progress_every: int | None = None
-    if progress is not None and progress > 0:
-        progress_every = int(progress)
-
+    target_ns = sorted(int(k) for k in n_entries) if n_list is None else [int(n) for n in n_list]
+    if columns is not None:
+        unknown = [c for c in columns if c not in TIE_COLUMNS]
+        if unknown:
+            raise ValueError(f"Unknown tie columns {unknown}; available: {TIE_COLUMNS}")
+    every = int(progress) if progress else 0
     total = len(target_ns)
     t0 = time.perf_counter()
     yielded = 0
-    if progress_every:
-        if total == 0:
-            print("[html] tie shards: no n values to load", file=sys.stderr)
+    for step, n in enumerate(target_ns, start=1):
+        entry = n_entries.get(str(n))
+        shard_path = _resolve_manifest_shard_path(path, str(entry.get("path", ""))) if isinstance(entry, dict) else ""
+        if not shard_path or not os.path.isfile(shard_path):
+            if require_all:
+                raise FileNotFoundError(f"No tie table for n={n} in {path!r}.")
         else:
+            yielded += 1
+            yield n, _read_tie_parquet(shard_path, columns)
+        if every and (step % every == 0 or step == total):
             print(
-                f"[html] tie shards: loading {total} n values from {path!r}",
+                f"[ties] n={n} step {step}/{total} loaded={yielded} elapsed {time.perf_counter() - t0:.2f}s",
                 file=sys.stderr,
             )
 
-    for step_index, n in enumerate(target_ns, start=1):
-        try:
-            entry = n_entries.get(str(n))
-            if not isinstance(entry, dict):
-                if require_all:
-                    raise ValueError(f"Missing shard manifest entry for n={n} in {path!r}.")
-                continue
 
-            shard_ref = str(entry.get("shard_path", ""))
-            if not shard_ref:
-                if require_all:
-                    raise ValueError(f"Missing shard_path for n={n} in manifest {path!r}.")
-                continue
-
-            shard_path = _resolve_manifest_shard_path(path, shard_ref)
-            if not os.path.exists(shard_path):
-                if require_all:
-                    raise FileNotFoundError(
-                        f"Shard file not found for n={n}: {shard_path!r} (from {path!r})."
-                    )
-                continue
-
-            with open(shard_path, "rb") as f:
-                shard_payload = pickle.load(f)
-
-            if not isinstance(shard_payload, dict):
-                if require_all:
-                    raise ValueError(f"Invalid shard payload for n={n}: {shard_path!r}.")
-                continue
-
-            need_keys: list[str] = []
-            if include_float_by_n:
-                need_keys.append("float_by_n")
-            if include_float_with_pairs_by_n:
-                need_keys.append("float_with_pairs_by_n")
-            if include_tie_slope_by_n:
-                need_keys.append("tie_slope_by_n")
-            missing = [k for k in need_keys if k not in shard_payload]
-            if missing:
-                if require_all:
-                    raise ValueError(
-                        f"Shard payload missing required keys for n={n}: {missing} in {shard_path!r}."
-                    )
-                continue
-
-            out_payload: dict[str, object] = {}
-            if include_float_by_n:
-                out_payload["float_by_n"] = shard_payload["float_by_n"]
-            if include_float_with_pairs_by_n:
-                out_payload["float_with_pairs_by_n"] = shard_payload["float_with_pairs_by_n"]
-            if include_tie_slope_by_n:
-                out_payload["tie_slope_by_n"] = shard_payload["tie_slope_by_n"]
-            yielded += 1
-            yield n, out_payload
-        finally:
-            if progress_every and total:
-                pe = progress_every
-                if step_index % pe == 0 or step_index == total:
-                    elapsed = time.perf_counter() - t0
-                    print(
-                        f"[html] tie shards: n={n} step {step_index}/{total} "
-                        f"elapsed {elapsed:.2f}s loaded_n={yielded}",
-                        file=sys.stderr,
-                    )
-
-    if progress_every and total:
-        elapsed = time.perf_counter() - t0
-        print(
-            f"[html] tie shards: done loaded_n={yielded} in {elapsed:.2f}s",
-            file=sys.stderr,
-        )
+def load_tie_tables(
+    path: str = DEFAULT_TIE_OUTPUT,
+    n_list: list[int] | None = None,
+    columns: list[str] | tuple[str, ...] | None = None,
+    require_all: bool = True,
+    *,
+    progress: int | None = None,
+) -> dict[int, dict[str, np.ndarray]]:
+    """``{n: table}`` for the requested ``n`` (see ``iter_tie_tables``)."""
+    return dict(iter_tie_tables(path, n_list, columns, require_all, progress=progress))
 
 
 def load_graph_data_from_shards(
@@ -527,7 +475,7 @@ def load_graph_data_from_shards(
         raise ValueError(
             f"Invalid graph-shard manifest payload in {resolved_manifest_path!r}: expected dict."
         )
-    if manifest.get("format") != "obd.graph_data.shards.v2":
+    if manifest.get("format") != GRAPH_MANIFEST_FORMAT:
         raise ValueError(
             f"Unsupported graph-shard manifest format in {resolved_manifest_path!r}: {manifest.get('format')!r}."
         )
@@ -576,7 +524,7 @@ def load_graph_data_from_shards(
             if require_all:
                 raise ValueError(f"Invalid graph shard payload for n={n}: {shard_path!r}.")
             continue
-        if shard_payload.get("format") != "obd.graph_data.n_shard.v2":
+        if shard_payload.get("format") != GRAPH_SHARD_FORMAT:
             if require_all:
                 raise ValueError(
                     f"Unsupported graph shard format for n={n}: {shard_payload.get('format')!r}."
@@ -586,7 +534,6 @@ def load_graph_data_from_shards(
             "y" not in shard_payload
             or "perm" not in shard_payload
             or "expected_sorted_by_p" not in shard_payload
-            or "expected_sorted_slope_by_p" not in shard_payload
         ):
             if require_all:
                 raise ValueError(
@@ -598,12 +545,11 @@ def load_graph_data_from_shards(
             "y": np.asarray(shard_payload["y"]),
             "perm": np.asarray(shard_payload["perm"]),
             "expected_sorted_by_p": np.asarray(shard_payload["expected_sorted_by_p"]),
-            "expected_sorted_slope_by_p": np.asarray(shard_payload["expected_sorted_slope_by_p"]),
         }
 
     p_values = np.asarray(manifest.get("p_values", []), dtype=np.float32)
     return {
-        "format": "obd.graph_data.shards.v2",
+        "format": GRAPH_MANIFEST_FORMAT,
         "n_min": int(manifest.get("n_min", min(rows_by_n) if rows_by_n else 0)),
         "n_max": int(manifest.get("n_max", max(rows_by_n) if rows_by_n else -1)),
         "p_steps": int(manifest.get("p_steps", len(p_values))),
@@ -614,285 +560,117 @@ def load_graph_data_from_shards(
     }
 
 
-def load_cusp_data(
+def load_cusp_table(
     path: str = DEFAULT_CUSP_OUTPUT,
     n_list: list[int] | None = None,
-    require_all: bool = True,
-) -> dict:
-    """Load cusp-sidecar pickle written by ``save_cusp_data_from_tie_shards``.
+    columns: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, np.ndarray]:
+    """The cusp table written by ``save_cusp_table``: one row per certified cusp, all n.
 
-    Returns a dict with file metadata plus ``n_entries``: ``dict[int, dict]`` mapping each
-    ``n`` to its stored block (``n``, ``center_index``, ``center_p_float``, ``count_cusps``,
-    ``updated_at``, ``records``).
-
-    On disk, ``n_entries`` uses string keys; this loader normalizes them to ``int`` keys.
+    Columns: ``n``, ``tie_index`` (signed, relative to the center tie ``p = 1/2``, which is always a
+    cusp) and the tie columns ``p, i, j, E, slope_left, slope_right, log10_D, decided_by``. Rows are
+    sorted by ``n`` then ``p``. ``n_list`` keeps only those n.
     """
-    with open(path, "rb") as f:
-        payload = pickle.load(f)
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
 
-    if not isinstance(payload, dict):
-        raise ValueError(f"Invalid cusp payload in {path!r}: expected dict.")
-    fmt = payload.get("format")
+    meta = pq.read_schema(path).metadata or {}
+    fmt = meta.get(b"format", b"").decode()
     if fmt != CUSP_FORMAT:
         raise ValueError(
-            f"Unsupported cusp format in {path!r}: {fmt!r} (expected {CUSP_FORMAT!r}). "
+            f"Unsupported cusp table format in {path!r}: {fmt!r} (expected {CUSP_FORMAT!r}). "
             "Rebuild it with: python OBDsaveSourceData.py --save-cusp-data"
         )
-
-    raw_entries = payload.get("n_entries")
-    if not isinstance(raw_entries, dict):
-        raise ValueError(f"Invalid n_entries in cusp file {path!r}: expected dict.")
-
-    if n_list is None:
-        target_ns = sorted(int(k) for k in raw_entries.keys())
-    else:
-        target_ns = [int(n) for n in n_list]
-
-    n_entries: dict[int, dict] = {}
-    for n in target_ns:
-        entry = raw_entries.get(str(n))
-        if entry is None and n in raw_entries:
-            entry = raw_entries.get(n)
-        if not isinstance(entry, dict):
-            if require_all:
-                raise ValueError(f"Missing cusp entry for n={n} in {path!r}.")
-            continue
-        n_entries[int(n)] = entry
-
-    return {
-        "format": str(fmt),
-        "created_at": str(payload.get("created_at", "")),
-        "updated_at": str(payload.get("updated_at", "")),
-        "source_tie_manifest": str(payload.get("source_tie_manifest", "")),
-        "n_entries": n_entries,
-    }
+    cols = list(columns) if columns is not None else None
+    if cols is not None and n_list is not None and "n" not in cols:
+        cols = ["n"] + cols
+    tbl = pq.read_table(path, columns=cols)
+    if n_list is not None:
+        tbl = tbl.filter(pc.is_in(tbl.column("n"), value_set=pa.array([int(n) for n in n_list], type=pa.int16())))
+    return {name: _column_to_numpy(tbl.column(name)) for name in tbl.column_names}
 
 
-def save_cusp_data_from_tie_shards(
+def save_cusp_table(
     tie_manifest_path: str = DEFAULT_TIE_OUTPUT,
     path: str = DEFAULT_CUSP_OUTPUT,
     n_list: list[int] | None = None,
-    save_every: int = 20,
-    workers: int = DEFAULT_WORKERS,
     verbose: bool = False,
 ) -> None:
-    """Build the cusp-only sidecar file from existing tie shards.
+    """Write the cusp table: every certified cusp (``is_cusp``) of every n, from the tie tables.
 
-    One record per certified cusp (``is_cusp``), copied from the tie shard: the values are already
-    exact there, so nothing is recomputed.
+    Nothing is recomputed; the values are copied from the tie tables.
     """
-    tie_manifest_abs = os.path.abspath(tie_manifest_path)
-    if not os.path.isfile(tie_manifest_abs):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if not os.path.isfile(tie_manifest_path):
         print(
-            "ERROR: cusp generation requires an existing tie-point manifest and shard pickles.\n"
-            f"  Missing file (resolved path): {tie_manifest_abs}\n"
-            "\n"
-            "  Build tie data first, for example:\n"
-            f"    python OBDsaveSourceData.py --save-tie-points\n"
-            "  Or run the full explorer bundle (graph + tie shards + cusp):\n"
-            f"    python OBDsaveSourceData.py --all\n"
-            "\n"
-            "  If your manifest lives elsewhere, pass:\n"
-            f"    --tie-output PATH   (then --save-cusp-data uses the same path)\n",
+            "ERROR: the cusp table is built from the tie tables, and there is no tie manifest at "
+            f"{os.path.abspath(tie_manifest_path)}.\n"
+            "  Build them first:  python OBDsaveSourceData.py --save-tie-points\n"
+            "  or everything:     python OBDsaveSourceData.py --all",
             file=sys.stderr,
             flush=True,
         )
         sys.exit(1)
-    with open(tie_manifest_path, "rb") as f:
-        manifest = pickle.load(f)
-    if not isinstance(manifest, dict):
-        raise ValueError(f"Invalid tie manifest payload in {tie_manifest_path!r}: expected dict.")
-    _check_tie_manifest_format(manifest, tie_manifest_path)
-    n_entries = manifest.get("n_entries", {})
-    if not isinstance(n_entries, dict):
-        raise ValueError(f"Invalid n_entries in manifest {tie_manifest_path!r}: expected dict.")
-    if n_list is None:
-        target_ns = sorted(int(k) for k in n_entries.keys())
-    else:
-        target_ns = [int(n) for n in n_list]
-
-    if save_every < 1:
-        raise ValueError("save_every must be at least 1")
-    if workers < 1:
-        raise ValueError("workers must be at least 1")
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    payload: dict = {
-        "format": CUSP_FORMAT,
-        "created_at": now,
-        "updated_at": now,
-        "source_tie_manifest": os.path.abspath(tie_manifest_path),
-        "n_entries": {},
-    }
-
-    def _checkpoint_write_output() -> float:
-        payload["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        t_write0 = time.perf_counter()
-        _atomic_pickle_dump(path, payload)
-        return time.perf_counter() - t_write0
-
-    pending_items: list[tuple[int, str]] = []
-    for n in target_ns:
-        entry = n_entries.get(str(int(n)))
-        if not isinstance(entry, dict):
-            raise ValueError(f"Missing shard manifest entry for n={n} in {tie_manifest_path!r}.")
-        shard_ref = str(entry.get("shard_path", ""))
-        if not shard_ref:
-            raise ValueError(f"Missing shard_path for n={n} in manifest {tie_manifest_path!r}.")
-        shard_path = _resolve_manifest_shard_path(tie_manifest_path, shard_ref)
-        if not os.path.exists(shard_path):
-            raise FileNotFoundError(
-                f"Shard file not found for n={n}: {shard_path!r} (from {tie_manifest_path!r})."
-            )
-        pending_items.append((int(n), os.path.abspath(shard_path)))
-
-    total_cusps = 0
-    n_computed = 0
-    n_since_save = 0
-    n_output_writes = 0
-    t_total = time.perf_counter()
-    payload_dirty = False
-
-    def _finalize_one(result: dict) -> None:
-        nonlocal total_cusps, n_computed, n_since_save, n_output_writes, payload_dirty
-        n_val = int(result["n"])
-        recs_out = list(result["records"])
-        payload["n_entries"][str(n_val)] = {
-            "n": n_val,
-            "center_index": int(result["center_index"]),
-            "center_p_float": float(result["center_p_float"]),
-            "count_cusps": int(len(recs_out)),
-            "updated_at": str(result["updated_at"]),
-            "records": recs_out,
+    t0 = time.perf_counter()
+    parts: dict[str, list[np.ndarray]] = {k: [] for k in ("n", "tie_index") + TIE_COLUMNS if k != "is_cusp"}
+    n_done = 0
+    for n, table in iter_tie_tables(tie_manifest_path, n_list, require_all=True, progress=(100 if verbose else None)):
+        rows = np.flatnonzero(table["is_cusp"])
+        center = tie_center_index(table)
+        parts["n"].append(np.full(rows.size, n, dtype=np.int16))
+        parts["tie_index"].append((rows - center).astype(np.int32))
+        for k in TIE_COLUMNS:
+            if k != "is_cusp":
+                parts[k].append(table[k][rows])
+        n_done += 1
+    cols = {}
+    for k, chunks in parts.items():
+        arr = np.concatenate(chunks) if chunks else np.array([])
+        cols[k] = pa.array(list(arr), type=pa.string()).dictionary_encode() if k == "decided_by" else pa.array(arr)
+    tbl = pa.table(cols).replace_schema_metadata(
+        {
+            b"format": CUSP_FORMAT.encode(),
+            b"source_tie_manifest": os.path.abspath(tie_manifest_path).encode(),
+            b"created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S").encode(),
+            b"obd_core_version": OBD_CORE_VERSION.encode(),
         }
-        payload_dirty = True
-        total_cusps += int(len(recs_out))
-        n_computed += 1
-        n_since_save += 1
-        if verbose:
-            print(
-                f"cusp n={n_val:4d} cusps={len(recs_out):4d} "
-                f"io_sec={float(result['io_sec']):.3f} iter_total_sec={float(result['iter_total_sec']):.3f}",
-                flush=True,
-            )
-        if n_since_save >= save_every:
-            t_write = _checkpoint_write_output()
-            n_since_save = 0
-            n_output_writes += 1
-            payload_dirty = False
-            if not verbose:
-                print(
-                    "Checkpoint cusp output write: "
-                    f"n={n_val}, computed={n_computed}, writes={n_output_writes}, write_sec={t_write:.4f}",
-                    flush=True,
-                )
-
-    if pending_items:
-        if workers == 1:
-            for n, shard_path in pending_items:
-                _finalize_one(_compute_cusp_from_shard(n=n, shard_path=shard_path))
-        else:
-            with cf.ProcessPoolExecutor(max_workers=int(workers)) as executor:
-                futures = [
-                    executor.submit(_compute_cusp_from_shard, n=int(n), shard_path=str(shard_path))
-                    for n, shard_path in pending_items
-                ]
-                for fut in cf.as_completed(futures):
-                    _finalize_one(fut.result())
-
-    if payload_dirty:
-        _checkpoint_write_output()
-        n_output_writes += 1
-
-    elapsed = time.perf_counter() - t_total
+    )
+    _ensure_parent_dir(path)
+    tmp = path + ".tmp"
+    pq.write_table(
+        tbl,
+        tmp,
+        compression="zstd",
+        use_dictionary=False,
+        use_byte_stream_split=[k for k in tbl.column_names if pa.types.is_floating(tbl.schema.field(k).type)],
+    )
+    os.replace(tmp, path)
     print(
-        f"Wrote cusp sidecar ({total_cusps} cusps over {n_computed} n, writes={n_output_writes}, "
-        f"save_every={save_every}) to {path} from {tie_manifest_path} in {elapsed:.2f}s"
+        f"Wrote cusp table ({tbl.num_rows} cusps over {n_done} n) to {path} "
+        f"from {tie_manifest_path} in {time.perf_counter() - t0:.2f}s"
     )
 
 
-def _compute_cusp_from_shard(n: int, shard_path: str) -> dict:
-    """Worker task: the cusp records for one n, read from its tie shard."""
-    t_iter0 = time.perf_counter()
-    with open(shard_path, "rb") as f:
-        shard_payload = pickle.load(f)
-    io_sec = time.perf_counter() - t_iter0
-
-    if not isinstance(shard_payload, dict):
-        raise ValueError(f"Invalid shard payload for n={n}: {shard_path!r}.")
-    for key in ("float_by_n", "float_with_pairs_by_n", "tie_slope_by_n"):
-        if key not in shard_payload:
-            raise ValueError(f"Shard payload missing {key!r} for n={n}: {shard_path!r}.")
-
-    tie_arr = np.asarray(shard_payload["float_by_n"], dtype=float).reshape(-1)
-    pair_recs = list(shard_payload["float_with_pairs_by_n"])
-    slope_recs = list(shard_payload["tie_slope_by_n"])
-    if tie_arr.size != len(slope_recs) or len(pair_recs) != len(slope_recs):
-        raise ValueError(
-            f"cusp shard n={n}: length mismatch slope_recs={len(slope_recs)}, "
-            f"float_by_n.size={tie_arr.size}, pairs={len(pair_recs)} ({shard_path!r})."
-        )
-
-    center_idx = int(np.argmin(np.abs(tie_arr - 0.5))) if tie_arr.size else 0
-    center_p_float = float(tie_arr[center_idx]) if tie_arr.size else 0.5
-    recs_out: list[dict] = []
-    for idx, rec in enumerate(slope_recs):
-        if not bool(rec.get("is_cusp", False)):
-            continue
-        tie_index = int(idx - center_idx)
-        recs_out.append(
-            {
-                "n": int(n),
-                "p_float": float(rec["p"]),
-                "tie_index": tie_index,
-                "is_center_tie": bool(tie_index == 0),
-                "pairs": [(int(i), int(j)) for i, j in pair_recs[idx][1]],
-                "expected_sorted": float(rec["expected_sorted"]),
-                "slope_left": float(rec["slope_left"]),
-                "slope_right": float(rec["slope_right"]),
-                "log10_D": float(rec["log10_D"]),
-                "decided_by": str(rec["decided_by"]),
-            }
-        )
-
-    return {
-        "n": int(n),
-        "center_index": int(center_idx),
-        "center_p_float": float(center_p_float),
-        "records": recs_out,
-        "io_sec": float(io_sec),
-        "iter_total_sec": float(time.perf_counter() - t_iter0),
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-
 def _compute_tie_shard(n: int, shards_dir_abs: str) -> dict:
-    """Worker task: compute every tie point of one n (exact slopes, certified cusps) and write one shard."""
+    """Worker task: every tie point of one n (exact slopes, certified cusps), written as Parquet."""
     t0 = time.perf_counter()
-    recs, slope_recs, stats = _tie_records_for_n(int(n))
-    cusp_ps = [float(r["p"]) for r in slope_recs if r["is_cusp"]]
+    table, stats = _tie_table_for_n(int(n))
+    cusp_ps = table["p"][table["is_cusp"]]
     t_compute = time.perf_counter() - t0
 
     t_write0 = time.perf_counter()
     shard_path_abs = os.path.join(shards_dir_abs, _tie_shard_filename_for_n(int(n)))
-    _atomic_pickle_dump(
-        shard_path_abs,
-        {
-            "format": TIE_SHARD_FORMAT,
-            "n": int(n),
-            "obd_core_version": OBD_CORE_VERSION,
-            "float_by_n": np.array([p for p, _ in recs], dtype=float),
-            "float_with_pairs_by_n": recs,
-            "tie_slope_by_n": slope_recs,
-        },
-    )
+    _write_tie_parquet(shard_path_abs, int(n), table)
     t_write = time.perf_counter() - t_write0
 
     return {
         "n": int(n),
-        "tie_point_count": len(recs),
-        "local_min_count": len(cusp_ps),
-        "max_local_min_p": (max(cusp_ps) if cusp_ps else None),
+        "tie_point_count": int(table["p"].size),
+        "cusp_count": int(cusp_ps.size),
+        "max_cusp_p": (float(cusp_ps.max()) if cusp_ps.size else None),
         "n_checked": int(stats["n_checked"]),
         "n_unresolved": int(stats["n_unresolved"]),
         "compute_sec": float(t_compute),
@@ -911,19 +689,16 @@ def save_tie_points(
     workers: int = DEFAULT_WORKERS,
     verbose: bool = False,
 ) -> None:
-    """Compute every tie point for each n and save it in sharded per-n pickle files.
+    """Compute every tie point for each n and save one Parquet table per n.
 
-    Writes one shard per n under ``shards_dir`` and updates a manifest pickle at ``path``.
-    Saves the manifest every ``save_every`` computed n (plus a final save), and writes a
-    timestamped CSV run log in ``log_dir`` with one row per n.
+    Tables go to ``<shards_dir>/n=NNNNN/part.parquet``; the JSON manifest at ``path`` lists them with
+    per-n counts. The manifest is saved every ``save_every`` computed n (plus a final save), and a
+    timestamped CSV run log goes to ``log_dir``. Any n already in the manifest with its file present
+    is skipped; a manifest in another format is discarded and every n rebuilt.
 
-    A manifest in an older format is discarded and every n is rebuilt: older shards hold
-    finite-difference slopes that are wrong (negative slope jumps, missed cusps).
-
-    Manifest keys:
-      format: schema/version marker for the sharded layout.
-      shards_dir: absolute path to shard directory.
-      n_entries[str(n)]: metadata for each available shard (``local_min`` = number of cusps).
+    Manifest keys: ``format``, ``created_at``, ``updated_at``, ``obd_core_version``, and
+    ``n_entries[str(n)]`` with ``n``, ``path`` (relative to the manifest), ``tie_points``,
+    ``cusps``, ``max_cusp_p``, ``n_checked``, ``n_unresolved``, ``updated_at``.
     """
     ns = n_list if n_list is not None else N_LIST
     _ensure_parent_dir(path)
@@ -933,38 +708,17 @@ def save_tie_points(
 
     t_start_dt = datetime.now()
     run_started_at = t_start_dt.strftime("%Y-%m-%d %H:%M:%S")
-    run_started_slug = t_start_dt.strftime("%Y%m%d_%H%M%S")
-    csv_log_path = os.path.join(log_dir, f"tie_points_verbose_{run_started_slug}.csv")
+    csv_log_path = os.path.join(log_dir, f"tie_points_verbose_{t_start_dt.strftime('%Y%m%d_%H%M%S')}.csv")
 
-    manifest: dict = {}
     try:
-        with open(path, "rb") as f:
-            manifest = pickle.load(f)
+        manifest = load_tie_manifest(path)
     except FileNotFoundError:
         manifest = {}
-    except (EOFError, pickle.UnpicklingError) as e:
-        print(
-            f"WARNING: Could not read existing tie manifest {path!r} ({e}). "
-            "Starting from empty data and rebuilding."
-        )
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"Tie manifest {path!r} is not usable ({e}); rebuilding every n.")
         manifest = {}
-
-    if not isinstance(manifest, dict):
-        manifest = {}
-    if manifest.get("format") != TIE_MANIFEST_FORMAT:
-        if manifest.get("format"):
-            print(
-                f"Tie manifest {path!r} is format {manifest.get('format')!r}; "
-                f"rebuilding every n as {TIE_MANIFEST_FORMAT!r}."
-            )
-        manifest = {
-            "format": TIE_MANIFEST_FORMAT,
-            "created_at": run_started_at,
-            "shards_dir": os.path.abspath(shards_dir),
-            "n_entries": {},
-        }
-    manifest.setdefault("n_entries", {})
-    manifest["shards_dir"] = os.path.abspath(shards_dir)
+    if not manifest:
+        manifest = {"format": TIE_FORMAT, "created_at": run_started_at, "n_entries": {}}
     manifest["obd_core_version"] = OBD_CORE_VERSION
     n_entries = manifest["n_entries"]
 
@@ -976,117 +730,88 @@ def save_tie_points(
     if workers < 1:
         raise ValueError("workers must be at least 1")
 
-    def _checkpoint_write_manifest() -> float:
-        t_write0 = time.perf_counter()
-        _atomic_pickle_dump(path, manifest)
-        return time.perf_counter() - t_write0
+    def _checkpoint_write_manifest() -> None:
+        manifest["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _atomic_json_dump(path, manifest)
+
+    pending_ns: list[int] = []
+    n_skipped = 0
+    for n in ns:
+        entry = n_entries.get(str(int(n)))
+        ok = isinstance(entry, dict) and os.path.isfile(_resolve_manifest_shard_path(path, str(entry.get("path", ""))))
+        if ok:
+            n_skipped += 1
+        else:
+            pending_ns.append(int(n))
 
     csv_fields = [
-        "run_started_at",
-        "n",
-        "compute_sec",
-        "write_sec",
-        "iter_total_sec",
-        "tie_points",
-        "local_min",
-        "max_local_min_p",
-        "n_checked",
-        "n_unresolved",
+        "run_started_at", "n", "compute_sec", "write_sec", "iter_total_sec",
+        "tie_points", "cusps", "max_cusp_p", "n_checked", "n_unresolved",
     ]
     with open(csv_log_path, "w", newline="") as csv_f:
         csv_writer = csv.DictWriter(csv_f, fieldnames=csv_fields, lineterminator="\n")
         csv_writer.writeheader()
-
         t_total = time.perf_counter()
-        n_skipped = 0
-        n_computed = 0
-        n_since_save = 0
-        n_manifest_writes = 0
-        n_unresolved_total = 0
-        manifest_dirty = False
-        pending_ns: list[int] = []
-
-        for n in ns:
-            entry = n_entries.get(str(int(n)))
-            shard_ok = False
-            if isinstance(entry, dict):
-                shard_ref = str(entry.get("shard_path", ""))
-                if shard_ref:
-                    shard_ok = os.path.exists(_resolve_manifest_shard_path(path, shard_ref))
-            if shard_ok:
-                n_skipped += 1
-            else:
-                pending_ns.append(int(n))
+        counters = {"computed": 0, "since_save": 0, "writes": 0, "unresolved": 0}
+        manifest_parent = os.path.dirname(os.path.abspath(path)) or "."
 
         if verbose and pending_ns:
             print("n     compute_sec  write_sec  tie_points  cusps  checked  max_cusp_p")
             print("-" * 72)
 
         def _finalize_one(result: dict) -> None:
-            nonlocal n_computed, n_since_save, n_manifest_writes, manifest_dirty, n_unresolved_total
             n_val = int(result["n"])
-            max_local_min_p = result["max_local_min_p"]
-            t_compute = float(result["compute_sec"])
-            t_write = float(result["write_sec"])
-            n_unresolved = int(result["n_unresolved"])
-            n_unresolved_total += n_unresolved
-            if n_unresolved:
+            max_p = result["max_cusp_p"]
+            n_unres = int(result["n_unresolved"])
+            counters["unresolved"] += n_unres
+            if n_unres:
                 print(
-                    f"WARNING: n={n_val}: {n_unresolved} tie point(s) UNRESOLVED even at 200 digits; "
+                    f"WARNING: n={n_val}: {n_unres} tie point(s) UNRESOLVED even at 200 digits; "
                     "they are stored as is_cusp=False."
                 )
-
-            manifest_parent = os.path.dirname(os.path.abspath(path)) or "."
             n_entries[str(n_val)] = {
                 "n": n_val,
-                "shard_path": os.path.relpath(str(result["shard_path_abs"]), start=manifest_parent),
+                "path": os.path.relpath(str(result["shard_path_abs"]), start=manifest_parent),
                 "tie_points": int(result["tie_point_count"]),
-                "local_min": int(result["local_min_count"]),
-                "max_local_min_p": (float(max_local_min_p) if max_local_min_p is not None else None),
+                "cusps": int(result["cusp_count"]),
+                "max_cusp_p": (float(max_p) if max_p is not None else None),
                 "n_checked": int(result["n_checked"]),
-                "n_unresolved": n_unresolved,
+                "n_unresolved": n_unres,
                 "updated_at": str(result["updated_at"]),
             }
-            manifest_dirty = True
-            n_since_save += 1
-            n_computed += 1
-
+            counters["computed"] += 1
+            counters["since_save"] += 1
+            t_c, t_w = float(result["compute_sec"]), float(result["write_sec"])
             csv_writer.writerow(
                 {
                     "run_started_at": run_started_at,
                     "n": n_val,
-                    "compute_sec": f"{t_compute:.6f}",
-                    "write_sec": f"{t_write:.6f}",
-                    "iter_total_sec": f"{t_compute + t_write:.6f}",
+                    "compute_sec": f"{t_c:.6f}",
+                    "write_sec": f"{t_w:.6f}",
+                    "iter_total_sec": f"{t_c + t_w:.6f}",
                     "tie_points": int(result["tie_point_count"]),
-                    "local_min": int(result["local_min_count"]),
-                    "max_local_min_p": (
-                        f"{float(max_local_min_p):.12f}" if max_local_min_p is not None else ""
-                    ),
+                    "cusps": int(result["cusp_count"]),
+                    "max_cusp_p": (f"{float(max_p):.12f}" if max_p is not None else ""),
                     "n_checked": int(result["n_checked"]),
-                    "n_unresolved": n_unresolved,
+                    "n_unresolved": n_unres,
                 }
             )
             csv_f.flush()
-
             if verbose:
-                max_p_str = f"{float(max_local_min_p):.6f}" if max_local_min_p is not None else "none"
+                max_p_str = f"{float(max_p):.6f}" if max_p is not None else "none"
                 print(
-                    f"{n_val:5d} {t_compute:11.4f}s {t_write:9.4f}s {int(result['tie_point_count']):11d} "
-                    f"{int(result['local_min_count']):6d} {int(result['n_checked']):8d}  {max_p_str}",
+                    f"{n_val:5d} {t_c:11.4f}s {t_w:9.4f}s {int(result['tie_point_count']):11d} "
+                    f"{int(result['cusp_count']):6d} {int(result['n_checked']):8d}  {max_p_str}",
                     flush=True,
                 )
-
-            if n_since_save >= save_every:
-                t_manifest_write = _checkpoint_write_manifest()
-                n_since_save = 0
-                n_manifest_writes += 1
-                manifest_dirty = False
+            if counters["since_save"] >= save_every:
+                _checkpoint_write_manifest()
+                counters["since_save"] = 0
+                counters["writes"] += 1
                 if not verbose:
                     print(
-                        "Checkpoint tie manifest write: "
-                        f"n={n_val}, computed={n_computed}, skipped={n_skipped}, "
-                        f"writes={n_manifest_writes}, write_sec={t_manifest_write:.4f}",
+                        f"Checkpoint tie manifest write: n={n_val}, computed={counters['computed']}, "
+                        f"skipped={n_skipped}, writes={counters['writes']}",
                         flush=True,
                     )
 
@@ -1095,32 +820,27 @@ def save_tie_points(
                 for n in pending_ns:
                     _finalize_one(_compute_tie_shard(n=n, shards_dir_abs=shards_dir_abs))
             else:
-                # largest n first, so the slowest shards do not start last
-                order = sorted(pending_ns, reverse=True)
+                # largest n first, so the slowest tables do not start last
                 with cf.ProcessPoolExecutor(max_workers=int(workers)) as executor:
                     futures = [
                         executor.submit(_compute_tie_shard, n=int(n), shards_dir_abs=shards_dir_abs)
-                        for n in order
+                        for n in sorted(pending_ns, reverse=True)
                     ]
                     for fut in cf.as_completed(futures):
                         _finalize_one(fut.result())
 
-        if manifest_dirty:
+        if counters["since_save"] or not os.path.isfile(path):
             _checkpoint_write_manifest()
-            n_manifest_writes += 1
+            counters["writes"] += 1
 
         elapsed = time.perf_counter() - t_total
-        if n_computed == 0 and n_skipped == len(ns):
-            print(
-                f"Tie points up to date ({len(ns)} n values, all skipped) - "
-                f"manifest={path}, shards_dir={shards_dir}, log={csv_log_path}"
-            )
+        if counters["computed"] == 0 and n_skipped == len(ns):
+            print(f"Tie points up to date ({len(ns)} n values, all skipped) - manifest={path}")
         else:
             print(
-                f"Wrote tie points shards ({n_computed} n computed, {n_skipped} skipped, "
-                f"{n_manifest_writes} manifest writes, save_every={save_every}, "
-                f"unresolved={n_unresolved_total}) to shards_dir={shards_dir} with manifest={path} "
-                f"in {elapsed:.2f}s (log={csv_log_path})"
+                f"Wrote tie tables ({counters['computed']} n computed, {n_skipped} skipped, "
+                f"{counters['writes']} manifest writes, unresolved={counters['unresolved']}) "
+                f"to {shards_dir} with manifest={path} in {elapsed:.2f}s (log={csv_log_path})"
             )
 
 
@@ -1185,9 +905,9 @@ def save_graph_data(
 
     if not isinstance(manifest, dict):
         manifest = {}
-    if manifest.get("format") != "obd.graph_data.shards.v2":
+    if manifest.get("format") != GRAPH_MANIFEST_FORMAT:
         manifest = {
-            "format": "obd.graph_data.shards.v2",
+            "format": GRAPH_MANIFEST_FORMAT,
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "p_steps": int(p_steps),
@@ -1246,7 +966,6 @@ def save_graph_data(
         t0 = time.perf_counter()
         y_arr = np.empty((int(p_steps), int(n + 1)), dtype=np.float32)
         perm_arr = np.empty((int(p_steps), int(n + 1)), dtype=np.uint16)
-        expected_sorted_arr = np.empty(int(p_steps), dtype=np.float32)
         ks_arr = np.arange(n + 1, dtype=np.float64)
         n_float = float(n)
         n_minus_ks_arr = n_float - ks_arr
@@ -1272,9 +991,8 @@ def save_graph_data(
             y_arr[p_idx, :] = pmf.astype(np.float32)
             perm_idx = np.argsort(pmf, kind="stable")
             perm_arr[p_idx, :] = perm_idx.astype(np.uint16)
-            expected_sorted_arr[p_idx] = float(np.dot(ks_arr, pmf[perm_idx]))
-        p_values_f64 = np.asarray(p_values, dtype=np.float64)
-        expected_sorted_slope_arr = np.gradient(expected_sorted_arr.astype(np.float64), p_values_f64).astype(np.float32)
+        # E itself from obd_core (same masses and ranking as the tie tables), not re-derived here
+        expected_sorted_arr, _, _ = obd_core.E_slopes_at(int(n), np.asarray(p_values, dtype=np.float64))
         t_compute = time.perf_counter() - t0
 
         t_write0 = time.perf_counter()
@@ -1285,13 +1003,12 @@ def save_graph_data(
         _atomic_pickle_dump(
             shard_path_abs,
             {
-                "format": "obd.graph_data.n_shard.v2",
+                "format": GRAPH_SHARD_FORMAT,
                 "n": int(n),
                 "p_steps": int(p_steps),
                 "y": y_arr,
                 "perm": perm_arr,
                 "expected_sorted_by_p": expected_sorted_arr,
-                "expected_sorted_slope_by_p": expected_sorted_slope_arr,
             },
         )
         manifest_parent = os.path.dirname(os.path.abspath(path)) or "."
@@ -1304,8 +1021,7 @@ def save_graph_data(
             "k_count": int(n + 1),
             "dtype_y": "float32",
             "dtype_perm": "uint16",
-            "dtype_expected_sorted": "float32",
-            "dtype_expected_sorted_slope": "float32",
+            "dtype_expected_sorted": "float64",
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         manifest_dirty = True
@@ -1364,7 +1080,7 @@ def save_graph_data(
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Save tie-point pickle, graph precompute data, slope-by-p data, and/or print tie "
+            "Save the tie-point tables (Parquet), graph data shards and cusp table, and/or print tie "
             "comparison/timing tables. "
             "With no flags, saves the OBDgraphExplorer1 bundle (same as -a/--all)."
         )
@@ -1396,7 +1112,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--save-cusp-data",
         action="store_true",
         help=(
-            "Build the cusp-only sidecar from the tie shards "
+            "Build the cusp table (every certified cusp of every n) from the tie tables "
             f"(default output: {DEFAULT_CUSP_OUTPUT})."
         ),
     )
@@ -1424,39 +1140,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--tie-output",
         default=DEFAULT_TIE_OUTPUT,
         metavar="PATH",
-        help=f"Output path for tie-point manifest (default: {DEFAULT_TIE_OUTPUT}).",
+        help=f"Tie-point manifest (JSON) path (default: {DEFAULT_TIE_OUTPUT}).",
     )
     p.add_argument(
         "--cusp-output",
         default=DEFAULT_CUSP_OUTPUT,
         metavar="PATH",
-        help=f"Output path for cusp sidecar data (default: {DEFAULT_CUSP_OUTPUT}).",
-    )
-    p.add_argument(
-        "--cusp-save-every",
-        type=int,
-        default=20,
-        metavar="K",
-        help=(
-            "Checkpoint cadence for cusp output writes: save after every K computed n values "
-            "(plus a final save)."
-        ),
-    )
-    p.add_argument(
-        "--cusp-workers",
-        type=int,
-        default=DEFAULT_WORKERS,
-        metavar="K",
-        help=(
-            "Process workers for the cusp sidecar build; each worker reads one n "
-            f"at a time (default: {DEFAULT_WORKERS})."
-        ),
+        help=f"Cusp table (Parquet) path (default: {DEFAULT_CUSP_OUTPUT}).",
     )
     p.add_argument(
         "--tie-shards-dir",
         default=DEFAULT_TIE_SHARDS_DIR,
         metavar="DIR",
-        help=f"Directory for per-n tie-point+slope shards (default: {DEFAULT_TIE_SHARDS_DIR}).",
+        help=f"Directory for the per-n tie tables, n=NNNNN/part.parquet (default: {DEFAULT_TIE_SHARDS_DIR}).",
     )
     p.add_argument(
         "--tie-log-dir",
@@ -1596,10 +1292,6 @@ if __name__ == "__main__":
         parser.error("--tie-workers must be >= 1")
     if args.graph_save_every < 1:
         parser.error("--graph-save-every must be >= 1")
-    if args.cusp_save_every < 1:
-        parser.error("--cusp-save-every must be >= 1")
-    if args.cusp_workers < 1:
-        parser.error("--cusp-workers must be >= 1")
 
     tie_ns = list(range(args.tie_n_min, args.tie_n_max + 1))
     if args.print_comparison_table:
@@ -1632,12 +1324,10 @@ if __name__ == "__main__":
             workers=args.tie_workers,
             verbose=args.verbose,
         )
-        save_cusp_data_from_tie_shards(
+        save_cusp_table(
             tie_manifest_path=args.tie_output,
             path=args.cusp_output,
             n_list=tie_ns_explorer,
-            save_every=args.cusp_save_every,
-            workers=args.cusp_workers,
             verbose=args.verbose,
         )
     else:
@@ -1662,11 +1352,9 @@ if __name__ == "__main__":
                 verbose=args.verbose,
             )
         if args.save_cusp_data:
-            save_cusp_data_from_tie_shards(
+            save_cusp_table(
                 tie_manifest_path=args.tie_output,
                 path=args.cusp_output,
                 n_list=tie_ns,
-                save_every=args.cusp_save_every,
-                workers=args.cusp_workers,
                 verbose=args.verbose,
             )

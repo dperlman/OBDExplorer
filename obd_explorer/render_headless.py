@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import pickle
 import sys
 import time
 from dataclasses import dataclass
@@ -168,66 +167,16 @@ def _normalize_heat_for_render(
     return np.asarray(heat, dtype=float), lo, hi
 
 
-def _tie_heatmap_value_at_record(
-    *,
-    n: int,
-    rec: tuple,
-    slope_rec: dict | None,
-    value_key: str,
-) -> float:
-    pairs = rec[1] if isinstance(rec, (list, tuple)) and len(rec) >= 2 else None
-    i_val: float = float("nan")
-    j_val: float = float("nan")
-    if pairs:
-        first = pairs[0]
-        if isinstance(first, (list, tuple)) and len(first) == 2:
-            i_val = float(first[0])
-            j_val = float(first[1])
-
-    sl: float = float("nan")
-    sr: float = float("nan")
-    ld: float = float("nan")
-    evn: float = float("nan")
-    if isinstance(slope_rec, dict):
-        raw_sl = slope_rec.get("slope_left")
-        raw_sr = slope_rec.get("slope_right")
-        raw_ld = slope_rec.get("log10_D")
-        raw_es = slope_rec.get("expected_sorted")
-        if raw_ld is not None and np.isfinite(float(raw_ld)):
-            ld = float(raw_ld)
-        if raw_sl is not None and np.isfinite(float(raw_sl)):
-            sl = float(raw_sl)
-        if raw_sr is not None and np.isfinite(float(raw_sr)):
-            sr = float(raw_sr)
-        if raw_es is not None and np.isfinite(float(raw_es)) and n > 0:
-            evn = float(raw_es) / float(n)
-
-    if value_key == "i":
-        return i_val
-    if value_key == "j":
-        return j_val
-    if value_key == "l":
-        return sl
-    if value_key == "r":
-        return sr
-    if value_key == "d":
-        return ld
-    if value_key == "ev_n":
-        return evn
-    raise ValueError(f"Unsupported tie heatmap value key: {value_key!r}")
+# tie heatmap value key -> tie-table column it is read from
+_TIE_VALUE_COLUMN = {"i": "i", "j": "j", "l": "slope_left", "r": "slope_right", "d": "log10_D", "ev_n": "E"}
 
 
-def _canonical_center_index_for_recs(n: int, recs: list) -> int | None:
-    from OBDsaveSourceData import _is_canonical_center_tie
-
-    for rec_idx, item in enumerate(recs):
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            continue
-        pairs = item[1]
-        plist = list(pairs) if pairs else []
-        if _is_canonical_center_tie(int(n), plist):
-            return rec_idx
-    return None
+def _tie_heatmap_values(table: dict[str, np.ndarray], value_key: str, n: int) -> np.ndarray:
+    """The heatmap scalar for every row of one n's tie table (``ev_n`` is E/n; ``d`` is log10 D)."""
+    if value_key not in _TIE_VALUE_COLUMN:
+        raise ValueError(f"Unsupported tie heatmap value key: {value_key!r}")
+    v = table[_TIE_VALUE_COLUMN[value_key]].astype(float)
+    return v / float(n) if value_key == "ev_n" else v
 
 
 def _nearest_values_by_p_grid(
@@ -309,87 +258,30 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     total = len(n_vals)
 
     if val_key in GRAPH_HEATMAP_VALUE_CHOICES:
+        # E and its slope at every pixel's p, exactly, from obd_core: no stored grid, no
+        # interpolation and no finite differences.  eslope_n is E'(p)/n; at a p that falls exactly
+        # on a tie point (p = 1/2 does for every n) E has a kink and the mean of the two one-sided
+        # slopes is used.
         if verbose:
             print(
-                f"[heatmap] source=graph_shards value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} p={p_min:.6f}..{p_max:.6f}",
+                f"[heatmap] source=obd_core value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} p={p_min:.6f}..{p_max:.6f}",
                 file=sys.stderr,
             )
-        from OBDsaveSourceData import (
-            DEFAULT_GRAPH_SHARDS_DIR,
-            _resolve_graph_manifest_path,
-            _resolve_manifest_shard_path,
-        )
-
-        manifest_path = _resolve_graph_manifest_path(
-            cfg.graph_manifest,
-            None,
-            cfg.graph_shards_dir or DEFAULT_GRAPH_SHARDS_DIR,
-        )
-        if not os.path.isfile(manifest_path):
-            print(
-                f"ERROR: Graph shard manifest not found: {os.path.abspath(manifest_path)}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        with open(manifest_path, "rb") as f:
-            manifest = pickle.load(f)
-        if not isinstance(manifest, dict):
-            print(f"ERROR: invalid graph shard manifest payload in {manifest_path!r}.", file=sys.stderr)
-            sys.exit(1)
-        if manifest.get("format") != "obd.graph_data.shards.v2":
-            print(
-                f"ERROR: unsupported graph shard manifest format {manifest.get('format')!r} in {manifest_path!r}.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        manifest_p_vals = np.asarray(manifest.get("p_values", []), dtype=float)
-        if manifest_p_vals.size < 2:
-            print("ERROR: invalid p_values in graph manifest.", file=sys.stderr)
-            sys.exit(1)
-        n_entries = manifest.get("n_entries", {})
-        if not isinstance(n_entries, dict):
-            print("ERROR: invalid n_entries in graph manifest.", file=sys.stderr)
-            sys.exit(1)
+        import obd_core
 
         for step_index, n in enumerate(n_vals, start=1):
-            entry = n_entries.get(str(int(n)))
-            if not isinstance(entry, dict):
-                continue
-            shard_ref = str(entry.get("shard_path", ""))
-            if not shard_ref:
-                continue
-            shard_path = _resolve_manifest_shard_path(manifest_path, shard_ref)
-            if not os.path.isfile(shard_path):
-                continue
-
-            with open(shard_path, "rb") as f:
-                shard = pickle.load(f)
-            if not isinstance(shard, dict):
-                continue
-            if shard.get("format") != "obd.graph_data.n_shard.v2":
-                continue
-            if "expected_sorted_by_p" not in shard or "expected_sorted_slope_by_p" not in shard:
-                continue
-
-            expected_sorted = np.asarray(shard["expected_sorted_by_p"], dtype=float)
-            expected_sorted_slope = np.asarray(shard["expected_sorted_slope_by_p"], dtype=float)
-            if expected_sorted.size != manifest_p_vals.size or expected_sorted_slope.size != manifest_p_vals.size:
-                continue
-
+            e_vals, s_left, s_right = obd_core.E_slopes_at(int(n), x_vals)
             if val_key == "ev_n":
-                src_vals = expected_sorted / float(n)
+                heat[step_index - 1, :] = e_vals / float(n)
             else:  # eslope_n
-                src_vals = expected_sorted_slope / float(n)
-            row_vals = np.interp(x_vals, manifest_p_vals, src_vals)
-            heat[step_index - 1, :] = row_vals
+                heat[step_index - 1, :] = 0.5 * (s_left + s_right) / float(n)
 
             if cfg.progress_every and total:
                 pe = int(cfg.progress_every)
                 if step_index % pe == 0 or step_index == total:
                     elapsed = time.monotonic() - t0
                     print(
-                        f"[heatmap] graph shards: n={n} step {step_index}/{total} elapsed {elapsed:.2f}s",
+                        f"[heatmap] obd_core: n={n} step {step_index}/{total} elapsed {elapsed:.2f}s",
                         file=sys.stderr,
                     )
     else:
@@ -398,55 +290,27 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
                 f"[heatmap] source=tie_shards_nearest_proxy value={val_key} n={cfg.n_min}..{cfg.n_max} p_steps={cfg.p_steps} p={p_min:.6f}..{p_max:.6f}",
                 file=sys.stderr,
             )
-        from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
+        from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_tables
 
-        need_slopes = val_key in ("l", "r", "d")
-        n_rows = iter_tie_points_from_shards(
-            path=DEFAULT_TIE_OUTPUT,
+        n_rows = iter_tie_tables(
+            DEFAULT_TIE_OUTPUT,
             n_list=n_vals,
+            columns=("p", _TIE_VALUE_COLUMN[val_key]),
             require_all=False,
             progress=cfg.progress_every,
-            include_float_by_n=False,
-            include_float_with_pairs_by_n=True,
-            include_tie_slope_by_n=need_slopes,
         )
         row_by_n = {n: i for i, n in enumerate(n_vals)}
-        for n, payload_for_n in n_rows:
+        for n, table in n_rows:
             rr = row_by_n.get(int(n))
             if rr is None:
                 continue
-            recs = payload_for_n.get("float_with_pairs_by_n") if isinstance(payload_for_n, dict) else None
-            if not isinstance(recs, list) or not recs:
+            v_all = _tie_heatmap_values(table, val_key, int(n))
+            finite = np.isfinite(table["p"]) & np.isfinite(v_all)
+            p_list = table["p"][finite].astype(float)
+            v_list = v_all[finite]
+            if not p_list.size:
                 continue
-            slope_list = payload_for_n.get("tie_slope_by_n") if isinstance(payload_for_n, dict) else None
-            slope_recs = list(slope_list) if isinstance(slope_list, list) else []
-
-            p_list: list[float] = []
-            v_list: list[float] = []
-            for rec_idx, rec in enumerate(recs):
-                if not isinstance(rec, (list, tuple)) or len(rec) != 2:
-                    continue
-                p_val = float(rec[0])
-                if not np.isfinite(p_val):
-                    continue
-                slope_rec = slope_recs[rec_idx] if rec_idx < len(slope_recs) and isinstance(slope_recs[rec_idx], dict) else None
-                v = _tie_heatmap_value_at_record(
-                    n=int(n),
-                    rec=rec,
-                    slope_rec=slope_rec,
-                    value_key=val_key,
-                )
-                if not np.isfinite(v):
-                    continue
-                p_list.append(p_val)
-                v_list.append(float(v))
-            if not p_list:
-                continue
-            row_vals = _nearest_values_by_p_grid(
-                np.asarray(p_list, dtype=float),
-                np.asarray(v_list, dtype=float),
-                x_vals,
-            )
+            row_vals = _nearest_values_by_p_grid(p_list, v_list, x_vals)
             heat[rr, :] = row_vals
 
     import matplotlib.pyplot as plt
@@ -486,7 +350,7 @@ def export_heatmap_headless(cfg: HeatmapExportConfig, *, verbose: bool = True) -
     if val_key == "ev_n":
         title_label = "E_sorted/n"
     elif val_key == "eslope_n":
-        title_label = "(d/dp E_sorted)/n"
+        title_label = "E'(p)/n (exact slope)"
     elif val_key == "d":
         title_label = "log10 D (slope jump) via nearest tie"
     else:
@@ -550,7 +414,7 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
         print('ERROR: load_from must be "l" or "r".', file=sys.stderr)
         sys.exit(1)
 
-    from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_points_from_shards
+    from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_tables, tie_center_index
 
     n_vals = list(range(cfg.n_min, cfg.n_max + 1))
     row_by_n = {n: i for i, n in enumerate(n_vals)}
@@ -559,50 +423,27 @@ def export_tie_heatmap_headless(cfg: TieHeatmapExportConfig, *, verbose: bool = 
 
     tie_manifest = cfg.tie_manifest or DEFAULT_TIE_OUTPUT
     if not os.path.isfile(tie_manifest):
-        print(f"ERROR: tie shard manifest not found: {os.path.abspath(tie_manifest)}", file=sys.stderr)
+        print(f"ERROR: tie manifest not found: {os.path.abspath(tie_manifest)}", file=sys.stderr)
         sys.exit(1)
-    n_rows = iter_tie_points_from_shards(
-        path=tie_manifest,
+    n_rows = iter_tie_tables(
+        tie_manifest,
         n_list=n_vals,
+        columns=("p", _TIE_VALUE_COLUMN[value_key]),
         require_all=False,
         progress=cfg.progress_every,
-        include_float_by_n=False,
-        include_float_with_pairs_by_n=True,
-        include_tie_slope_by_n=True,
     )
-    for n, payload_for_n in n_rows:
-        if n not in row_by_n:
+    for n, table in n_rows:
+        if n not in row_by_n or table["p"].size == 0:
             continue
-        recs = payload_for_n.get("float_with_pairs_by_n")
-        if not isinstance(recs, list) or not recs:
-            continue
-        slope_list = payload_for_n.get("tie_slope_by_n")
-        slope_recs = list(slope_list) if isinstance(slope_list, list) else []
-
-        rr = row_by_n[n]
+        values = _tie_heatmap_values(table, value_key, int(n))
         if load_from == "l":
             # Left mode must match HTML variant 5 semantics:
-            # native tie index t maps to rec_idx = center_idx + t, with t in 1..1000.
-            center_idx = _canonical_center_index_for_recs(int(n), recs)
-            if center_idx is None:
-                raise ValueError(f"n={n}: missing canonical center tie point in float_with_pairs_by_n")
-            m_nonneg = len(recs) - int(center_idx)
-            n_take = min(max_ties, max(0, m_nonneg - 1))
+            # native tie index t maps to row center_idx + t, with t in 1..1000.
+            center_idx = tie_center_index(table)
+            take = values[center_idx + 1 : center_idx + 1 + max_ties]
         else:
-            n_take = min(max_ties, len(recs))
-        for pos in range(n_take):
-            if load_from == "l":
-                rec_idx = int(center_idx) + (pos + 1)
-            else:
-                rec_idx = len(recs) - 1 - pos
-            rec = recs[rec_idx]
-            slope_rec = slope_recs[rec_idx] if rec_idx < len(slope_recs) else None
-            heat[rr, pos] = _tie_heatmap_value_at_record(
-                n=n,
-                rec=rec,
-                slope_rec=slope_rec if isinstance(slope_rec, dict) else None,
-                value_key=value_key,
-            )
+            take = values[::-1][:max_ties]
+        heat[row_by_n[n], : take.size] = take
 
     import matplotlib.pyplot as plt
     from matplotlib import colors

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Overlay features vs N for one cusp row per ``N`` from the cusp sidecar pickle.
+"""Overlay features vs N for one cusp row per ``N`` from the cusp table.
 
-**Which row:** every record in the sidecar is a certified cusp; take the one with the **largest**
+**Which row:** every row of the cusp table is a certified cusp; take the one with the **largest**
 ``p_float`` (the last cusp); if several tie on ``p``, pick the larger ``tie_index``.
 
 **Y-axis assignment (precedence):** slopes (``PLOT_LEFT`` / ``PLOT_RIGHT``) then ``PLOT_P`` then
@@ -9,7 +9,7 @@
 ``twinx`` on the right; the third uses a second ``twinx`` (spine offset when needed). Each axis
 is autoscaled to the finite values actually plotted for that group in the selected ``N`` range.
 
-When ``PLOT_EV`` is enabled, the EV curve is ``expected_sorted / N`` (per-point).
+When ``PLOT_EV`` is enabled, the EV curve is ``E / N`` (per-point).
 
 Every ``N`` that passes ``--n-min`` / ``--n-max`` / parity gets a point; missing or non-finite
 values are stored as NaN so lines show gaps instead of dropping ``N``.
@@ -25,7 +25,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from OBDsaveSourceData import DEFAULT_CUSP_OUTPUT, load_cusp_data
+from OBDsaveSourceData import DEFAULT_CUSP_OUTPUT, load_cusp_table
 
 # --- plot toggles (edit here) ---
 PLOT_LEFT = False
@@ -44,47 +44,12 @@ N_MIN: int | None = 100
 N_MAX: int | None = 1000
 
 
-def _tie_p(rec: dict) -> float:
-    """Same ``p`` coordinate as ``plot_max_local_min_p_vs_n._tie_p``."""
-    if "p_float" in rec:
-        return float(rec["p_float"])
-    return float(rec["p"])
-
-
-def _select_highest_p_cusp_record(records: list[dict]) -> dict | None:
-    """The cusp with the largest ``p``; tie-break larger ``tie_index``.
-
-    Every record in the sidecar is a certified cusp, so no filtering is needed.
-    """
-    if not records:
-        return None
-
-    def _sort_key(r: dict) -> tuple[float, int]:
-        try:
-            ti = int(r["tie_index"])
-        except (KeyError, TypeError, ValueError):
-            ti = 0
-        return (_tie_p(r), ti)
-
-    return max(records, key=_sort_key)
-
-
-def _parse_hp_number(s: object) -> float | None:
-    if s is None:
-        return None
-    try:
-        v = float(str(s).strip().replace(",", ""))
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(v):
-        return None
-    return float(v)
-
-
-def _last_cusp_p(rec: dict) -> float | None:
-    if "p_float" in rec:
-        return _parse_hp_number(rec["p_float"])
-    return _parse_hp_number(rec.get("p"))
+def _last_cusp_rows(cusps: dict[str, np.ndarray]) -> dict[int, int]:
+    """Row of the last cusp (largest ``p``; ties broken by larger ``tie_index``) for each n."""
+    order = np.lexsort((cusps["tie_index"], cusps["p"], cusps["n"]))
+    n_sorted = cusps["n"][order]
+    last = np.flatnonzero(np.r_[n_sorted[1:] != n_sorted[:-1], True])
+    return {int(n_sorted[k]): int(order[k]) for k in last}
 
 
 def _finite_or_nan(x: float | None) -> float:
@@ -127,7 +92,7 @@ def main() -> None:
         type=str,
         default=DEFAULT_CUSP_OUTPUT,
         metavar="PATH",
-        help=f"Cusp sidecar pickle (default: {DEFAULT_CUSP_OUTPUT}).",
+        help=f"Cusp table (Parquet; default: {DEFAULT_CUSP_OUTPUT}).",
     )
     parser.add_argument(
         "--output",
@@ -167,10 +132,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    payload = load_cusp_data(path=args.input, n_list=None, require_all=False)
-    n_entries = payload.get("n_entries") or {}
-    if not n_entries:
-        raise ValueError(f"No n_entries in {args.input!r}")
+    cusps = load_cusp_table(path=args.input)
+    if cusps["n"].size == 0:
+        raise ValueError(f"No cusps in {args.input!r}")
+    last_row = _last_cusp_rows(cusps)
 
     n_min = args.n_min
     n_max = args.n_max
@@ -182,8 +147,7 @@ def main() -> None:
     p_y: list[float] = []
     ev_y: list[float] = []
 
-    for n_key in sorted(n_entries.keys(), key=lambda k: int(k)):
-        ni = int(n_key)
+    for ni in sorted(last_row):
         if n_min is not None and ni < n_min:
             continue
         if n_max is not None and ni > n_max:
@@ -192,16 +156,11 @@ def main() -> None:
             continue
         if parity == "odd" and ni % 2 != 1:
             continue
-        block = n_entries[n_key]
-        records = block.get("records")
-        if not isinstance(records, list):
-            records = []
-        rec = _select_highest_p_cusp_record(records)
-
-        sl = _parse_hp_number(rec.get("slope_left")) if rec else None
-        sr = _parse_hp_number(rec.get("slope_right")) if rec else None
-        pv = _last_cusp_p(rec) if rec else None
-        ev = _parse_hp_number(rec.get("expected_sorted")) if rec else None
+        k = last_row[ni]
+        sl = float(cusps["slope_left"][k])
+        sr = float(cusps["slope_right"][k])
+        pv = float(cusps["p"][k])
+        ev = float(cusps["E"][k])
 
         ns.append(ni)
         left_y.append(_finite_or_nan(sl) if PLOT_LEFT else float("nan"))

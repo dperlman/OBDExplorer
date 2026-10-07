@@ -1,84 +1,40 @@
-"""Tie-point draw entries for bands (from tie-shard manifest bundle)."""
+"""Tie-point draw entries for bands (from the per-n tie tables)."""
 
 from __future__ import annotations
 
 import os
-from typing import Any
 
 import numpy as np
 
-# (p, i, j, slope_left, slope_right, log10_D); values may be None if missing from payload.
-# log10_D is log10 of the slope jump D = slope_right - slope_left, stored exactly in the shard: never
-# recompute it as the difference of the two slopes, which loses it to cancellation.
+# (p, i, j, slope_left, slope_right, log10_D); values may be None if missing.
+# log10_D is log10 of the slope jump D = slope_right - slope_left, stored exactly in the tie tables:
+# never recompute it as the difference of the two slopes, which loses it to cancellation.
 TieDrawEntry = tuple[float, int | None, int | None, float | None, float | None, float | None]
 
+_DRAW_COLUMNS = ("p", "i", "j", "slope_left", "slope_right", "log10_D")
 
-def load_tie_draw_entries_from_payload(
-    data: dict[str, Any],
-    n_vals: list[int],
-    tie_p_min: float,
-    tie_p_max: float,
-) -> dict[int, list[TieDrawEntry]]:
-    """Parse ``float_with_pairs_by_n`` / ``float_by_n`` plus optional ``tie_slope_by_n``."""
-    fwp = data.get("float_with_pairs_by_n") or data.get("by_n") or {}
-    float_by_n = data.get("float_by_n", {})
-    slope_by_n = data.get("tie_slope_by_n") or {}
-    out: dict[int, list[TieDrawEntry]] = {}
-    for n in n_vals:
-        segs: list[TieDrawEntry] = []
-        recs = fwp.get(n)
-        if recs is None and isinstance(fwp, dict):
-            recs = fwp.get(str(n))
-        slope_recs = slope_by_n.get(n)
-        if slope_recs is None and isinstance(slope_by_n, dict):
-            slope_recs = slope_by_n.get(str(n))
-        slope_list: list[dict[str, Any]] = list(slope_recs) if isinstance(slope_recs, list) else []
 
-        if recs is not None:
-            for rec_idx, item in enumerate(recs):
-                if not isinstance(item, (list, tuple)) or len(item) != 2:
-                    continue
-                p_raw, pairs = item[0], item[1]
-                pf = float(p_raw)
-                if not (tie_p_min <= pf <= tie_p_max):
-                    continue
-                pr = round(pf, 6)
-                slope_sl: float | None = None
-                slope_sr: float | None = None
-                log10_d: float | None = None
-                if rec_idx < len(slope_list) and isinstance(slope_list[rec_idx], dict):
-                    sd = slope_list[rec_idx]
-                    sl = sd.get("slope_left")
-                    sr = sd.get("slope_right")
-                    if sl is not None and np.isfinite(float(sl)):
-                        slope_sl = float(sl)
-                    if sr is not None and np.isfinite(float(sr)):
-                        slope_sr = float(sr)
-                    ld = sd.get("log10_D")
-                    if ld is not None and np.isfinite(float(ld)):
-                        log10_d = float(ld)
-                plist = pairs or []
-                if not plist:
-                    segs.append((pr, None, None, slope_sl, slope_sr, log10_d))
-                    continue
-                for ij in plist:
-                    if not isinstance(ij, (list, tuple)) or len(ij) != 2:
-                        continue
-                    segs.append((pr, int(ij[0]), int(ij[1]), slope_sl, slope_sr, log10_d))
-        else:
-            raw = float_by_n.get(n)
-            if raw is None and isinstance(float_by_n, dict):
-                raw = float_by_n.get(str(n))
-            if raw is None:
-                continue
-            arr = np.atleast_1d(np.asarray(raw, dtype=float))
-            for pf in arr.flat:
-                if not np.isfinite(pf) or not (tie_p_min <= float(pf) <= tie_p_max):
-                    continue
-                segs.append((round(float(pf), 6), None, None, None, None, None))
-        if segs:
-            out[n] = segs
-    return out
+def _finite_or_none(v: float) -> float | None:
+    return float(v) if np.isfinite(v) else None
+
+
+def tie_draw_entries_from_table(
+    table: dict[str, np.ndarray], tie_p_min: float, tie_p_max: float
+) -> list[TieDrawEntry]:
+    """Draw entries for one n's tie table, restricted to ``tie_p_min <= p <= tie_p_max``."""
+    p = table["p"]
+    keep = np.flatnonzero((p >= tie_p_min) & (p <= tie_p_max))
+    return [
+        (
+            round(float(p[k]), 6),
+            int(table["i"][k]),
+            int(table["j"][k]),
+            _finite_or_none(table["slope_left"][k]),
+            _finite_or_none(table["slope_right"][k]),
+            _finite_or_none(table["log10_D"][k]),
+        )
+        for k in keep.tolist()
+    ]
 
 
 def resolve_tie_draw_entries(
@@ -88,11 +44,15 @@ def resolve_tie_draw_entries(
     tie_p_max: float,
     tie_manifest_path: str | None = None,
 ) -> dict[int, list[TieDrawEntry]]:
-    """Load tie segments from the tie-point shard manifest (``OBDsaveSourceData`` layout)."""
-    from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, load_tie_points_from_shards
+    """Load tie segments from the tie tables (``OBDsaveSourceData`` layout)."""
+    from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_tables
 
     man = tie_manifest_path or DEFAULT_TIE_OUTPUT
     if not os.path.isfile(man):
         return {}
-    payload = load_tie_points_from_shards(man, n_list=n_vals, require_all=False)
-    return load_tie_draw_entries_from_payload(payload, n_vals, tie_p_min, tie_p_max)
+    out: dict[int, list[TieDrawEntry]] = {}
+    for n, table in iter_tie_tables(man, n_list=n_vals, columns=_DRAW_COLUMNS, require_all=False):
+        segs = tie_draw_entries_from_table(table, tie_p_min, tie_p_max)
+        if segs:
+            out[n] = segs
+    return out

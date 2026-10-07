@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from OBDsaveSourceData import _is_canonical_center_tie
+from OBDsaveSourceData import tie_center_index
 
 from obd_explorer.grid import BinomialGrid
 
@@ -94,23 +94,19 @@ def materialize_binomial_series_for_js(
     return grid.binomial_flat
 
 
-def tie_ps_above_half_from_pair_records(recs: list) -> list[float]:
-    if not recs:
-        return []
-    pts = [float(p) for p, _ in recs]
-    return sorted([round(p, 6) for p in pts if 0.5 < p < 1])
+def tie_ps_above_half(table: dict[str, np.ndarray]) -> list[float]:
+    """Tie ``p`` in ``(0.5, 1)`` of one n's tie table, rounded to 6 decimals, ascending."""
+    return sorted(round(p, 6) for p in table["p"].tolist() if 0.5 < p < 1)
 
 
 def tie_points_by_n_for_explorer1(
-    tie_payload: dict[str, Any],
+    tie_tables: dict[int, dict[str, np.ndarray]],
     n_min: int,
     n_max: int,
     *,
     progress: bool = False,
 ) -> dict[str, list[float]]:
     """``TIE_POINTS_BY_N`` for HTML: string keys -> tie p list in (0.5, 1)."""
-    float_with_pairs_by_n = tie_payload.get("float_with_pairs_by_n") or {}
-    float_by_n = tie_payload.get("float_by_n") or {}
     out: dict[str, list[float]] = {}
     t0 = time.perf_counter()
     if progress:
@@ -120,22 +116,10 @@ def tie_points_by_n_for_explorer1(
         )
     for n in range(n_min, n_max + 1):
         try:
-            recs = float_with_pairs_by_n.get(n)
-            if recs is None and isinstance(float_with_pairs_by_n, dict):
-                recs = float_with_pairs_by_n.get(str(n))
-            if recs is not None:
-                above_half = tie_ps_above_half_from_pair_records(recs)
-            else:
-                raw = float_by_n.get(n)
-                if raw is None and isinstance(float_by_n, dict):
-                    raw = float_by_n.get(str(n))
-                if raw is None:
-                    continue
-                try:
-                    pts = [float(x) for x in raw]
-                except (TypeError, ValueError):
-                    pts = [float(raw)]
-                above_half = sorted([round(p, 6) for p in pts if 0.5 < p < 1])
+            table = tie_tables.get(n)
+            if table is None:
+                continue
+            above_half = tie_ps_above_half(table)
             if above_half:
                 out[str(n)] = above_half
         finally:
@@ -172,112 +156,39 @@ EXPLORER5_EMBEDDED_ROW_COUNT = EXPLORER5_CENTER_ARM_LENGTH + EXPLORER5_TAIL_ARM_
 EXPLORER5_MAX_TIE_INDEX = EXPLORER5_EMBEDDED_ROW_COUNT - 1
 
 
-def _tie_explorer5_series_row_for_n(
-    n: int,
-    recs: list[Any],
-    slope_recs: list[Any] | None,
-) -> dict[str, Any] | None:
-    """Build one variant 5/6 embedded row payload for a single ``n``."""
-    m = len(recs)
+TIE_EXPLORER5_COLUMNS = ("p", "i", "j", "slope_left", "slope_right", "log10_D", "E")
+
+
+def _tie_explorer5_series_row_for_n(n: int, table: dict[str, np.ndarray]) -> dict[str, Any] | None:
+    """Build one variant 5/6 embedded row payload for a single ``n`` from its tie table."""
+    m = int(table["p"].size)
     if m == 0:
         return None
-
-    center_idx: int | None = None
-    for rec_idx, item in enumerate(recs):
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            continue
-        pairs = item[1]
-        plist = list(pairs) if pairs else []
-        if _is_canonical_center_tie(int(n), plist):
-            center_idx = rec_idx
-            break
-
-    if center_idx is None:
-        raise ValueError(f"n={n}: missing canonical center tie point in float_with_pairs_by_n")
-
+    center_idx = tie_center_index(table)
     m_nonneg = m - center_idx
-    if m_nonneg <= 0:
-        raise ValueError(f"n={n}: invalid center index {center_idx} for {m} tie rows")
 
-    forward_native: set[int] = set()
-    for t in range(EXPLORER5_CENTER_ARM_LENGTH):
-        ri = center_idx + t
-        if 0 <= t < m_nonneg and 0 <= ri < m:
-            forward_native.add(t)
+    forward_native = set(range(min(EXPLORER5_CENTER_ARM_LENGTH, m_nonneg)))
+    backward_native = set(range(max(0, m_nonneg - EXPLORER5_TAIL_ARM_LENGTH), m_nonneg))
+    rows = [center_idx + t for t in sorted(forward_native | backward_native)]
 
-    backward_native: set[int] = set()
-    tail_start = max(0, m_nonneg - EXPLORER5_TAIL_ARM_LENGTH)
-    for t in range(tail_start, m_nonneg):
-        ri = center_idx + t
-        if 0 <= ri < m:
-            backward_native.add(t)
+    def _vals(name: str) -> list[float | None]:
+        col = table[name]
+        return [float(v) if np.isfinite(v) else None for v in col[rows].tolist()]
 
-    selected_native = sorted(forward_native | backward_native)
-    if not selected_native:
-        return None
-
-    slope_list: list[dict[str, Any]] = list(slope_recs) if isinstance(slope_recs, list) else []
-    ps: list[float] = []
-    iv: list[int | None] = []
-    jv: list[int | None] = []
-    lv: list[float | None] = []
-    rv: list[float | None] = []
-    dv: list[float | None] = []
-    ev_ns: list[float | None] = []
-    for t in selected_native:
-        rec_idx = center_idx + t
-        if not (0 <= rec_idx < m):
-            continue
-        item = recs[rec_idx]
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            continue
-        _, pairs = item[0], item[1]
-        pf = float(item[0])
-        pi, pj = None, None
-        plist = pairs or []
-        if plist:
-            first = plist[0]
-            if isinstance(first, (list, tuple)) and len(first) == 2:
-                pi, pj = int(first[0]), int(first[1])
-        sl: float | None = None
-        sr: float | None = None
-        ld: float | None = None
-        evn: float | None = None
-        if rec_idx < len(slope_list) and isinstance(slope_list[rec_idx], dict):
-            sd = slope_list[rec_idx]
-            raw_sl = sd.get("slope_left")
-            raw_sr = sd.get("slope_right")
-            if raw_sl is not None and np.isfinite(float(raw_sl)):
-                sl = float(raw_sl)
-            if raw_sr is not None and np.isfinite(float(raw_sr)):
-                sr = float(raw_sr)
-            raw_ld = sd.get("log10_D")
-            if raw_ld is not None and np.isfinite(float(raw_ld)):
-                ld = float(raw_ld)
-            raw_es = sd.get("expected_sorted")
-            if raw_es is not None and np.isfinite(float(raw_es)):
-                evn = float(raw_es) / float(n)
-        ps.append(round(pf, 6))
-        iv.append(pi)
-        jv.append(pj)
-        lv.append(sl)
-        rv.append(sr)
-        dv.append(ld)
-        ev_ns.append(evn)
-
+    ev = table["E"][rows]
     return {
-        "p": ps,
-        "i": iv,
-        "j": jv,
-        "l": lv,
-        "r": rv,
-        "d": dv,
-        "ev_n": ev_ns,
+        "p": [round(p, 6) for p in table["p"][rows].tolist()],
+        "i": [int(v) for v in table["i"][rows].tolist()],
+        "j": [int(v) for v in table["j"][rows].tolist()],
+        "l": _vals("slope_left"),
+        "r": _vals("slope_right"),
+        "d": _vals("log10_D"),
+        "ev_n": [float(v) / float(n) if np.isfinite(v) else None for v in ev.tolist()],
     }
 
 
 def tie_explorer5_series_by_n(
-    tie_payload: dict[str, Any],
+    tie_tables: dict[int, dict[str, np.ndarray]],
     n_min: int,
     n_max: int,
     *,
@@ -286,10 +197,10 @@ def tie_explorer5_series_by_n(
     """Per-n tie arrays for HTML explorer variants 5 and 6.
 
     Native tie index for variants 5/6 is defined on the **non-negative side only**:
-    index ``0`` is the canonical center tie point, and index ``t`` maps to record
-    ``rec_idx = center_idx + t``.
+    index ``0`` is the center tie point ``p = 1/2``, and index ``t`` maps to row
+    ``center_idx + t`` of the n's tie table.
 
-    Let ``m_nonneg = len(recs) - center_idx`` (ties from center through last tie).
+    Let ``m_nonneg = rows - center_idx`` (ties from center through last tie).
     Select native indices by union of:
 
     - **Forward arm:** ``0 .. EXPLORER5_CENTER_ARM_LENGTH-1`` (clipped by ``m_nonneg``)
@@ -297,53 +208,13 @@ def tie_explorer5_series_by_n(
 
     Union is sorted ascending by native index. Embedded row ``0`` is native index ``0``
     (center tie), and embedded last row is native index ``m_nonneg-1`` (last tie).
-
-    Slopes align with ``tie_slope_by_n[rec_idx]`` (record order in the shard).
-
-    If no canonical center tie row is found, this is treated as invalid data and raises ``ValueError``.
     """
-    float_with_pairs_by_n = tie_payload.get("float_with_pairs_by_n") or {}
-    slope_by_n = tie_payload.get("tie_slope_by_n") or {}
-    out: dict[str, dict[str, Any]] = {}
-    t0 = time.perf_counter()
-    if progress:
-        print(
-            f"[html] tie explorer embed: n in [{n_min}, {n_max}]",
-            file=sys.stderr,
-        )
-    for n in range(n_min, n_max + 1):
-        try:
-            recs = float_with_pairs_by_n.get(n)
-            if recs is None and isinstance(float_with_pairs_by_n, dict):
-                recs = float_with_pairs_by_n.get(str(n))
-            if not recs:
-                continue
-            slope_recs = slope_by_n.get(n)
-            if slope_recs is None and isinstance(slope_by_n, dict):
-                slope_recs = slope_by_n.get(str(n))
-            row = _tie_explorer5_series_row_for_n(int(n), list(recs), list(slope_recs) if isinstance(slope_recs, list) else None)
-            if row is not None:
-                out[str(n)] = row
-        finally:
-            k = n - n_min + 1
-            last_rows = len(out[str(n)]["p"]) if str(n) in out else 0
-            _html_verbose_n_tick(
-                tag="tie explorer embed",
-                n=n,
-                n_min=n_min,
-                n_max=n_max,
-                step_index=k,
-                t0=t0,
-                verbose=progress,
-                extra=f"stored_keys={len(out)} last_rows={last_rows}",
-            )
-    if progress:
-        elapsed = time.perf_counter() - t0
-        print(
-            f"[html] tie explorer embed: done stored_n={len(out)} in {elapsed:.2f}s",
-            file=sys.stderr,
-        )
-    return out
+    return tie_explorer5_series_by_n_stream(
+        ((n, tie_tables[n]) for n in range(n_min, n_max + 1) if n in tie_tables),
+        n_min,
+        n_max,
+        progress=progress,
+    )
 
 
 def tie_explorer5_series_by_n_stream(
@@ -353,7 +224,7 @@ def tie_explorer5_series_by_n_stream(
     *,
     progress: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    """Per-n tie arrays for variants 5/6 from streamed per-n shard payloads."""
+    """Per-n tie arrays for variants 5/6 from streamed ``(n, tie_table)`` pairs."""
     out: dict[str, dict[str, Any]] = {}
     t0 = time.perf_counter()
     total = max(0, int(n_max) - int(n_min) + 1)
@@ -364,16 +235,12 @@ def tie_explorer5_series_by_n_stream(
         )
 
     processed = 0
-    for n, payload_for_n in n_rows:
+    for n, table in n_rows:
         n_int = int(n)
         if n_int < n_min or n_int > n_max:
             continue
         try:
-            recs = payload_for_n.get("float_with_pairs_by_n") if isinstance(payload_for_n, dict) else None
-            if not isinstance(recs, list) or not recs:
-                continue
-            slope_recs = payload_for_n.get("tie_slope_by_n") if isinstance(payload_for_n, dict) else None
-            row = _tie_explorer5_series_row_for_n(n_int, recs, slope_recs if isinstance(slope_recs, list) else None)
+            row = _tie_explorer5_series_row_for_n(n_int, table)
             if row is not None:
                 out[str(n_int)] = row
         finally:

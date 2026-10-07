@@ -4,9 +4,10 @@ scipy
 sympy
 mpmath
 numba
+pyarrow
 # shared core mathematics (tie points, slopes, certified cusps); for development use
 #   pip install -e ../OBD-core
-obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.2.1
+obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.3.2
 matplotlib
 plotly
 scikit-learn

@@ -51,8 +51,14 @@ This repository is organized around a few workflows:
   - `pip install -r requirements.txt`
   - or use `environment.yml` with conda
 - The shared core mathematics (tie points, slopes, certified cusps) comes from
-  [OBD-core](https://github.com/dperlman/OBD-core), pinned to a release tag. To work on both at
-  once, clone it next to this repo and install it editable: `pip install -e ../OBD-core`.
+  [OBD-core](https://github.com/dperlman/OBD-core), pinned to a release tag; `requirements.txt`
+  installs that tag. Install it that way (not editable) in this repo's environment: numba caches
+  obd_core's compiled code next to the installed `obd_core.py`, so an editable install shared with
+  another environment that has a different numba version makes the two overwrite each other's
+  cache and recompile on every switch. To pick up a core change, tag a release there and bump the
+  pin here.
+- Tie points are stored as Parquet (`data/tie_points/`, needs `pyarrow`); see
+  [OBD_data_map.md](OBD_data_map.md).
 - GUI is optional and only needed for GUI-based workflows:
   - `pip install ".[gui]"`
 - Standard packaging/dependency metadata is in `pyproject.toml`.
