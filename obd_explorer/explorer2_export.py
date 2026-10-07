@@ -7,12 +7,12 @@ import time
 
 from OBDsaveSourceData import DEFAULT_TIE_OUTPUT
 
-from obd_explorer.explorer1_export import _load_tie_payload
+from obd_explorer.explorer1_export import _load_tie_tables
 from obd_explorer.explorer2_dual_html import build_explorer2_dual_panel_html_document
 from obd_explorer.explorer2_html import build_explorer2_html_document
 from obd_explorer.explorer2_pca import precompute_pca, precompute_tie_pca
 from obd_explorer.explorer4_pca_only_html import build_explorer4_pca_only_html_document
-from obd_explorer.explorer2_tie import last_tie_by_n_from_payload
+from obd_explorer.explorer2_tie import last_tie_by_n_from_tables
 from obd_explorer.grid import resolve_binomial_grid
 from obd_explorer.html_data import materialize_binomial_series_for_js
 
@@ -42,14 +42,12 @@ def _html_payload_for_explorer2_3(
     binomial_data = materialize_binomial_series_for_js(grid, progress=progress)
     p_grid = [float(x) for x in grid.p_values]
 
-    tie_payload = _load_tie_payload(
+    tie_tables = _load_tie_tables(
         tie_manifest,
         n_vals,
         progress=(10 if progress else None),
     )
-    if verbose and not tie_payload.get("float_with_pairs_by_n") and not tie_payload.get(
-        "float_by_n"
-    ):
+    if verbose and not tie_tables:
         man = tie_manifest or DEFAULT_TIE_OUTPUT
         print(
             f"WARNING: No tie shard manifest at {man!r}; "
@@ -57,7 +55,7 @@ def _html_payload_for_explorer2_3(
             file=sys.stderr,
         )
 
-    last_tie_by_n = last_tie_by_n_from_payload(tie_payload, n_vals)
+    last_tie_by_n = last_tie_by_n_from_tables(tie_tables, n_vals)
 
     if verbose:
         print(f"Precomputing PCA (n={n_min}..{n_max}, p_steps={p_steps})...")

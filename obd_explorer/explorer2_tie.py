@@ -1,8 +1,6 @@
-"""Tie upper bounds for explorer2 PCA (shard / pickle dict shapes, analytic fallback)."""
+"""Tie upper bounds for explorer2 PCA (from the tie tables, analytic fallback)."""
 
 from __future__ import annotations
-
-from typing import Any
 
 import numpy as np
 from scipy.special import comb
@@ -34,44 +32,16 @@ def last_tie_above_half(n: int) -> float:
     return float(above_half[-1])
 
 
-def last_tie_from_pair_records(recs: list) -> float:
-    """Largest tie ``p`` in ``(0.5, 1)`` from ``float_with_pairs_by_n`` records."""
-    best: float | None = None
-    for item in recs:
-        if not isinstance(item, (list, tuple)) or len(item) < 1:
-            continue
-        try:
-            p = float(item[0])
-        except (TypeError, ValueError):
-            continue
-        if 0.5 < p < 1:
-            if best is None or p > best:
-                best = p
-    return float(best) if best is not None else 1.0 - 1e-6
+def last_tie_from_table(table: dict[str, np.ndarray]) -> float:
+    """Largest tie ``p`` in ``(0.5, 1)`` of one n's tie table."""
+    p = table["p"]
+    above = p[(p > 0.5) & (p < 1)]
+    return float(above.max()) if above.size else 1.0 - 1e-6
 
 
-def last_tie_by_n_from_payload(tie_payload: dict[str, Any], n_vals: list[int]) -> dict[int, float]:
-    """Per-n last tie in ``(0.5, 1)``, matching legacy explorer2 tie loading."""
-    float_with_pairs_by_n = tie_payload.get("float_with_pairs_by_n") or {}
-    float_by_n = tie_payload.get("float_by_n") or {}
-    out: dict[int, float] = {}
-    for n in n_vals:
-        recs = float_with_pairs_by_n.get(n)
-        if recs is None:
-            recs = float_with_pairs_by_n.get(str(n))
-        if recs is not None:
-            out[n] = last_tie_from_pair_records(recs)
-            continue
-        raw = float_by_n.get(n)
-        if raw is None:
-            raw = float_by_n.get(str(n))
-        if raw is not None:
-            try:
-                pts = [float(x) for x in raw]
-            except (TypeError, ValueError):
-                pts = [float(raw)]
-            above = sorted(round(p, 6) for p in pts if 0.5 < p < 1)
-            out[n] = float(above[-1]) if above else 1.0 - 1e-6
-            continue
-        out[n] = last_tie_above_half(n)
-    return out
+def last_tie_by_n_from_tables(tie_tables: dict[int, dict[str, np.ndarray]], n_vals: list[int]) -> dict[int, float]:
+    """Per-n last tie in ``(0.5, 1)``; analytic fallback for any n without a tie table."""
+    return {
+        n: (last_tie_from_table(tie_tables[n]) if n in tie_tables else last_tie_above_half(n))
+        for n in n_vals
+    }

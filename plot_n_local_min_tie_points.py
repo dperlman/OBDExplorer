@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import argparse
 import os
-import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 
-from OBDsaveSourceData import DEFAULT_TIE_OUTPUT
+from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, load_tie_manifest
 
 
 def main() -> None:
@@ -22,7 +21,7 @@ def main() -> None:
         "--input",
         default=DEFAULT_TIE_OUTPUT,
         help=(
-            "Tie-point manifest pickle (sharded layout; default: same as "
+            "Tie-point manifest (JSON; default: same as "
             f"OBDsaveSourceData.DEFAULT_TIE_OUTPUT = {DEFAULT_TIE_OUTPUT!r})."
         ),
     )
@@ -38,16 +37,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    with open(args.input, "rb") as f:
-        manifest = pickle.load(f)
-
-    if not isinstance(manifest, dict):
-        raise ValueError(f"Expected dict in {args.input!r}, got {type(manifest)!r}.")
-    if manifest.get("format") != "obd.tie_points_slope.shards.v1":
-        raise ValueError(
-            f"Unsupported tie manifest format in {args.input!r}: {manifest.get('format')!r}. "
-            "Expected 'obd.tie_points_slope.shards.v1'."
-        )
+    manifest = load_tie_manifest(args.input)
 
     n_entries = manifest.get("n_entries") or {}
     if not isinstance(n_entries, dict) or not n_entries:
@@ -62,7 +52,7 @@ def main() -> None:
             continue
         ni = int(entry.get("n", n_key))
         total_tie_points = entry.get("tie_points")
-        local_min_count = entry.get("local_min")
+        local_min_count = entry.get("cusps")
         if total_tie_points is None or local_min_count is None:
             continue
         total_tie_points = int(total_tie_points)
@@ -75,7 +65,7 @@ def main() -> None:
 
     if not n_vals:
         raise ValueError(
-            f"No usable manifest rows with tie_points and local_min in {args.input!r}. "
+            f"No usable manifest rows with tie_points and cusps in {args.input!r}. "
             "Regenerate tie points with a current OBDsaveSourceData.py save."
         )
 

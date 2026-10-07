@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 
-from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, load_tie_points_from_shards
+from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, load_tie_tables
 
 from obd_explorer.explorer1_html import build_explorer1_html
 from obd_explorer.grid import resolve_binomial_grid
@@ -15,21 +15,17 @@ from obd_explorer.html_data import (
 )
 
 
-def _load_tie_payload(
+def _load_tie_tables(
     tie_manifest: str | None,
     n_vals: list[int],
     *,
     progress: int | None = None,
 ) -> dict:
+    """``{n: tie table}`` with the ``p`` column only (all the graph explorers need); ``{}`` if none."""
     man = tie_manifest or DEFAULT_TIE_OUTPUT
     if os.path.isfile(man):
-        return load_tie_points_from_shards(
-            man,
-            n_list=n_vals,
-            require_all=False,
-            progress=progress,
-        )
-    return {"float_with_pairs_by_n": {}, "float_by_n": {}}
+        return load_tie_tables(man, n_list=n_vals, columns=("p",), require_all=False, progress=progress)
+    return {}
 
 
 def write_explorer1_html(
@@ -56,12 +52,12 @@ def write_explorer1_html(
     binomial_data = materialize_binomial_series_for_js(grid, progress=progress)
     n_vals = list(range(n_min, n_max + 1))
     if include_tie_points:
-        tie_payload = _load_tie_payload(
+        tie_tables = _load_tie_tables(
             tie_manifest,
             n_vals,
             progress=(10 if progress else None),
         )
-        if not tie_payload.get("float_with_pairs_by_n") and not tie_payload.get("float_by_n"):
+        if not tie_tables:
             if verbose:
                 man = tie_manifest or DEFAULT_TIE_OUTPUT
                 print(
@@ -69,7 +65,7 @@ def write_explorer1_html(
                     "swap-point hairlines may be empty.\n",
                     file=sys.stderr,
                 )
-        tie_points_by_n = tie_points_by_n_for_explorer1(tie_payload, n_min, n_max, progress=progress)
+        tie_points_by_n = tie_points_by_n_for_explorer1(tie_tables, n_min, n_max, progress=progress)
     else:
         tie_points_by_n = {}
     html = build_explorer1_html(

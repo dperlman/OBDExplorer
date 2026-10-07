@@ -51,8 +51,19 @@ This repository is organized around a few workflows:
   - `pip install -r requirements.txt`
   - or use `environment.yml` with conda
 - The shared core mathematics (tie points, slopes, certified cusps) comes from
-  [OBD-core](https://github.com/dperlman/OBD-core), pinned to a release tag. To work on both at
-  once, clone it next to this repo and install it editable: `pip install -e ../OBD-core`.
+  [OBD-core](https://github.com/dperlman/OBD-core), pinned to a release tag; `requirements.txt`
+  installs that tag. To pick up a core change, tag a release there and bump the pin here.
+  How to use it -- `tie_table`, `E_slopes_at`, what is certified, pitfalls -- and how to check any
+  value rigorously with `obd_core.reference` (e.g. `reference.tie(n, i, j)`): see the
+  [OBD-core README](https://github.com/dperlman/OBD-core#readme). Never re-derive the mathematics
+  here.
+- The numerical stack (numpy, numba, llvmlite, mpmath) is pinned to exact versions by OBD-core's
+  `constraints.txt`, which `requirements.txt` applies (`environment.yml` repeats the pins for
+  conda). With identical versions this repo and ordered-binomial-cusps compute bit-identical
+  results, and numba's compiled-code cache (which is per numba version) stays valid even if both
+  share an editable install. `import obd_core` warns if the environment differs.
+- Tie points are stored as Parquet (`data/tie_points/`, needs `pyarrow`); see
+  [OBD_data_map.md](OBD_data_map.md).
 - GUI is optional and only needed for GUI-based workflows:
   - `pip install ".[gui]"`
 - Standard packaging/dependency metadata is in `pyproject.toml`.

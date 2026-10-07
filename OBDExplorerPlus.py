@@ -926,7 +926,7 @@ def _interactive_heatmap_export_settings() -> argparse.Namespace | None:
             "value",
             f'value ({"/".join(HEATMAP_VALUE_CHOICES)})',
             _parse_heatmap_value,
-            'Heatmap value: i/j/l/r/d/e use nearest-tie proxy per p; "ev_n"/"eslope_n" use graph shards.',
+            'Heatmap value: i/j/l/r/d (d = log10 D) use nearest-tie proxy per p; "ev_n"/"eslope_n" (E/n, exact E\'/n) are computed by obd_core.',
         ),
     ]
 
@@ -1598,7 +1598,7 @@ def main() -> None:
         "--value",
         default="ev_n",
         choices=HEATMAP_VALUE_CHOICES,
-        help='Heatmap value: i/j/l/r/d (d = log10 D) from nearest tie proxy, or "ev_n"/"eslope_n" from graph shards.',
+        help='Heatmap value: i/j/l/r/d (d = log10 D) from nearest tie proxy, or "ev_n"/"eslope_n" (E/n, exact E\'/n) computed by obd_core.',
     )
     p_hm.add_argument(
         "--colormap",
