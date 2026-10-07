@@ -1,5 +1,9 @@
 # OBDExplorer
 
+**Live demos: [dperlman.github.io/OBDExplorer](https://dperlman.github.io/OBDExplorer/)**:
+seven interactive explorers and example plots in the browser, nothing to install. They are built
+from this repo and published from [`docs/`](docs/).
+
 OBDExplorer is a research-oriented codebase for exploring the deep structure of
 the Ordered Binomial Distribution (OBD) through data generation, geometric/tie
 analysis, and interactive visualization tools.
