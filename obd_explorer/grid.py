@@ -1,4 +1,4 @@
-"""BinomialGrid and construction from graph shards."""
+"""BinomialGrid and construction from the graph data file."""
 
 from __future__ import annotations
 
@@ -106,11 +106,11 @@ def build_binomial_grid_from_shards(
     manifest_path: str | None = None,
     shards_dir: str | None = None,
 ) -> BinomialGrid:
-    """Load graph shards via OBDsaveSourceData.load_graph_data_from_shards."""
-    from OBDsaveSourceData import DEFAULT_GRAPH_SHARDS_DIR, load_graph_data_from_shards
+    """Load the graph data via OBDsaveSourceData.load_graph_data."""
+    from OBDsaveSourceData import DEFAULT_GRAPH_SHARDS_DIR, load_graph_data
 
     n_list = list(range(n_req_min, n_req_max + 1))
-    payload = load_graph_data_from_shards(
+    payload = load_graph_data(
         manifest_path=manifest_path,
         shards_dir=shards_dir or DEFAULT_GRAPH_SHARDS_DIR,
         p_steps=p_steps_req,
@@ -120,7 +120,7 @@ def build_binomial_grid_from_shards(
     p_steps = int(payload["p_steps"])
     if p_steps_req is not None and p_steps != int(p_steps_req):
         print(
-            f"ERROR: shard manifest p_steps={p_steps} != requested {p_steps_req}.\n",
+            f"ERROR: graph data p_steps={p_steps} != requested {p_steps_req}.\n",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -130,7 +130,7 @@ def build_binomial_grid_from_shards(
     rb = payload["rows_by_n"]
     for n in n_list:
         if n not in rb:
-            print(f"ERROR: missing graph shard data for n={n}.\n", file=sys.stderr)
+            print(f"ERROR: missing graph data for n={n}.\n", file=sys.stderr)
             sys.exit(1)
         rows_by_n[n] = rb[n]
     return BinomialGrid(
@@ -151,7 +151,7 @@ def resolve_binomial_grid(
     graph_manifest_path: str | None = None,
     graph_shards_dir: str | None = None,
 ) -> BinomialGrid:
-    """Load the binomial grid from graph shard manifests (see ``OBDsaveSourceData``)."""
+    """Load the binomial grid from the graph data file (see ``OBDsaveSourceData``)."""
     from OBDsaveSourceData import DEFAULT_GRAPH_SHARDS_DIR, _resolve_graph_manifest_path
 
     resolved = _resolve_graph_manifest_path(
@@ -159,10 +159,11 @@ def resolve_binomial_grid(
     )
     if not os.path.isfile(resolved):
         print(
-            f"ERROR: Graph shard manifest not found for p_steps={p_steps}:\n"
+            f"ERROR: Graph data file not found for p_steps={p_steps}:\n"
             f"  {os.path.abspath(resolved)}\n"
-            "  There is no fallback to a different p_grid. Build shards for this p_steps\n"
-            "  (e.g. OBDsaveSourceData --save-graph-data) or pass --graph-manifest / --graph-shards-dir.\n",
+            "  There is no fallback to a different p grid. Build it with\n"
+            "  python OBDsaveSourceData.py --save-graph-data (add --p-steps for another grid),\n"
+            "  or pass --graph-manifest / --graph-shards-dir.\n",
             file=sys.stderr,
         )
         sys.exit(1)

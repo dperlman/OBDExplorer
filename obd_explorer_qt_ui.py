@@ -1,8 +1,8 @@
 """
 Interactive desktop explorer for OBD graph curves, tie lines, and fills (PyQt6 + PyQtGraph).
 
-Loads graph data from graph shard manifests and tie data from tie shard manifests
-(see ``OBDsaveSourceData`` default paths under ``data/``).
+Loads the graph data (``data/graph_data_p<steps>.h5``) and the tie tables (``data/tie_points/``),
+both built by ``OBDsaveSourceData.py`` (see ``OBD_data_map.md``).
 """
 
 from __future__ import annotations

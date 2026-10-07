@@ -61,7 +61,7 @@ def write_explorer1_html(
             if verbose:
                 man = tie_manifest or DEFAULT_TIE_OUTPUT
                 print(
-                    f"WARNING: No tie shard manifest at {man!r}; "
+                    f"WARNING: No tie manifest at {man!r}; "
                     "swap-point hairlines may be empty.\n",
                     file=sys.stderr,
                 )

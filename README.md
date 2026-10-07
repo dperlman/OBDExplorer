@@ -4,70 +4,104 @@
 seven interactive explorers and example plots in the browser, nothing to install. They are built
 from this repo and published from [`docs/`](docs/).
 
-OBDExplorer is a research-oriented codebase for exploring the deep structure of
-the Ordered Binomial Distribution (OBD) through data generation, geometric/tie
-analysis, and interactive visualization tools.
+Interactive visualization of the **ordered binomial distribution**: E(n,p) = Σ w_k f(k), where
+f(k) are the Binomial(n,p) masses and w_k is the rank of f(k) among them. The plots show E, its
+tie points (where two masses are equal and E has a kink), the slope jumps there, and the cusps
+(the tie points that are local minima of E).
 
-This repository is organized around a few workflows:
+This repo is for **looking**, not proving. The research results live in
+[ordered-binomial-cusps](https://github.com/dperlman/ordered-binomial-cusps), and all the
+mathematics comes from [OBD-core](https://github.com/dperlman/OBD-core), which both repos share.
 
-- generate/load OBD-derived source data
-- compute tie points and related geometric diagnostics
-- inspect results in desktop and HTML explorers
-- export plots and intermediate artifacts for analysis
+## Quick start
 
-## Key files and folders
+```bash
+conda env create -f environment.yml     # once: creates the "obd" environment
+conda activate obd
+python OBDsaveSourceData.py --all       # once: builds data/ (~3 min, ~8 GB)
+python OBDExplorerPlus.py               # interactive menu: HTML explorers, exports, heatmaps, GUI
+```
 
-- `OBDExplorerPlus.py`
-  - Main entry point for running explorer variants and related workflows.
-- `OBDsaveSourceData.py`
-  - Core data-generation/loading pipeline used by explorers and diagnostics.
-- `obd_explorer/`
-  - Shared package with explorer implementations and core modules.
-  - `explorer*_html.py`, `explorer*_export.py`: HTML explorer UI builders and export wiring.
-  - `geometry.py`, `tie_data.py`, `model.py`, `numeric.py`: core computation and tie geometry logic.
-  - `qt_graphics.py`, `render_headless.py`: rendering support for Qt/headless paths.
-- `obd_explorer_qt_ui.py`
-  - Qt UI integration for desktop interactive exploration.
-- `OBDgraphExplorer1.py`, `OBDexplorer1.py`, `OBDexplorer2.py`, `OBDexplorer3.py`
-  - Explorer-oriented scripts for different analysis/visualization paths.
-- `diagnostic_*.py`, `plot_*.py`, `tie_*diagnostic*.py`, `test_exact_tie_point_agreement.py`
-  - Diagnostics, plotting tools, and validation scripts.
-- `html/`
-  - Generated HTML explorer outputs (ignored by git in this repo setup).
-- `html_old/`
-  - Older generated HTML artifacts (also ignored by git).
-- `data/`
-  - Large local datasets and shard outputs (ignored by git).
-- `log/`
-  - Generated logs and verbose tie-point analysis outputs.
-- `plots/`, `last_cusp_plots/`
-  - Generated plot exports and analysis figures.
+`pip install -r requirements.txt` works instead of conda. The desktop GUI needs the optional
+extras: `pip install ".[gui]"`.
 
-## Notes
+## Using it
 
-- This repo is configured to keep large generated artifacts out of GitHub:
-  - `data/`, `html/`, and `html_old/` are git-ignored.
-- The project Python dependencies are expected in the `obd` conda environment.
+Everything runs through `OBDExplorerPlus.py`: with no arguments it opens a menu, or call a
+subcommand directly (`--help` on each lists its options):
+
+| command | what it makes |
+|---|---|
+| `python OBDExplorerPlus.py html --variant N -o FILE.html` | a self-contained HTML explorer (variants 1–7, described on the [demo page](https://dperlman.github.io/OBDExplorer/)); bare filenames go to `html/` |
+| `python OBDExplorerPlus.py export -o FILE.png` | a static E/n graph with tie lines (PNG, PDF or SVG) |
+| `python OBDExplorerPlus.py heatmap -o FILE.png --value V` | an N–p heatmap: `d` (log₁₀ of the slope jump at the nearest tie point), `l`/`r` (slopes), `i`/`j` (the pair), `ev_n` (E/n), `eslope_n` (the exact slope E′/n) |
+| `python OBDExplorerPlus.py tie-heatmap -o FILE.png --value V` | an N–tie-index heatmap of the same tie values |
+| `python OBDExplorerPlus.py gui` | the interactive desktop explorer (needs the GUI extras) |
+
+Analysis plots: `python plot_last_cusp_features.py` (features of the last cusp against n) and
+`python plot_n_local_min_tie_points.py` (cusp counts against n) write PDFs to `data/`.
+
+## Data
+
+All the data is generated locally into [`data/`](data/) and is not in git. Rebuild everything
+with `python OBDsaveSourceData.py --all`, or one part with `--save-tie-points`,
+`--save-cusp-data` or `--save-graph-data`. [data/README.md](data/README.md) lists what each file
+is, its size and what uses it; [OBD_data_map.md](OBD_data_map.md) documents the formats and
+columns.
+
+The tie values come from OBD-core and are exact: one-sided slopes from the ranking, the slope
+jump as `log10_D`, and cusp flags proved by interval arithmetic where double precision is not
+enough. Never recompute a slope jump as `slope_right - slope_left`: for most tie points it is far
+below double precision. Use `log10_D`.
+
+## Rebuilding the published site
+
+GitHub Pages serves `docs/` from `main`. After a change that affects them, rebuild the pages with
+the settings they were made with:
+
+```bash
+python OBDExplorerPlus.py html --variant 1 -o docs/OBDExplorer1.html --n-min 2 --n-max 100     # likewise variants 2, 3, 4
+python OBDExplorerPlus.py html --variant 5 -o docs/OBDExplorer5.html --n-min 2 --n-max 200 --colorscale hsv   # likewise variant 6
+python OBDExplorerPlus.py html --variant 7 -o docs/OBDExplorer7.html --n-min 2 --n-max 200 --p-steps 3001 --p-min 0.5 --p-max 0.6 --colorscale hsv
+python OBDExplorerPlus.py heatmap -o docs/plots/N-pHeatmapLog10D.png --value d --colormap hsv --trim-color-range-percent 3 --p-min 0.5 --p-max 0.6 --p-steps 3001
+python OBDExplorerPlus.py heatmap -o docs/plots/N-pHeatmapAnnotated.png --value eslope_n --colormap prism --p-min 0 --p-max 1 --height-in 8
+python OBDExplorerPlus.py tie-heatmap -o docs/plots/N-tieHeatmapExact.png --pixel-mode exact --value d --colormap hsv
+```
+
+The three `N-pColorTieGraph*.png` plots were made with `export`; their exact settings were not
+recorded. Link any new page or plot from [`docs/index.html`](docs/index.html).
+
+## What's where
+
+| path | what |
+|---|---|
+| `OBDExplorerPlus.py` | the entry point (menu and subcommands above) |
+| `OBDsaveSourceData.py` | builds and loads everything in `data/` |
+| `obd_explorer/` | the explorer implementations: HTML builders and exporters (`explorer*_*.py`), headless rendering (`render_headless.py`), data loading (`grid.py`, `tie_data.py`, `html_data.py`) |
+| `obd_explorer_qt_ui.py` | the desktop GUI |
+| `plot_*.py` | analysis plots (PDFs into `data/`) |
+| `docs/` | the GitHub Pages site: explorer pages, `plots/`, `index.html` |
+| `data/`, `html/`, `plots/` | generated data and output, not in git (apart from placeholders); `html/` is where `html` writes by default |
+| `log/` | per-run logs from the data builds; new ones are not tracked |
+| `OBD_data_map.md` | data formats and columns |
+| `archive/` | old scripts that no longer run, kept for reference |
+| `OBDexplorer1.py`, `OBDexplorer3.py`, `OBD2Dprojection.py`, `OBDinteractiveBinomial.py`, `OBDPlots3d.py`, `OBDPlots4d.py`, `OBDsimpleGraph.py`, `OBDswapGraph1.py`, `OBDtSNE.py` | earlier standalone experiments (PCA projections, 3D/4D plots, simple graphs); they compute their own data |
+| `OBDgraphExplorer1.py`, `OBDexplorer2.py`, `OBDGraphExplorerQT.py`, `OBDGraphWithTiePyQTGraph.py` | thin shims that forward to `OBDExplorerPlus.py` |
+| `OBDtiePointFormulas.py`, `diagnostic_tie_p_method_agreement.py`, `test_exact_tie_point_agreement.py` | checks of the tie-point formulas against high precision |
 
 ## Environment and dependencies
 
-- Core (non-GUI) dependencies:
-  - `pip install -r requirements.txt`
-  - or use `environment.yml` with conda
-- The shared core mathematics (tie points, slopes, certified cusps) comes from
-  [OBD-core](https://github.com/dperlman/OBD-core), pinned to a release tag; `requirements.txt`
-  installs that tag. To pick up a core change, tag a release there and bump the pin here.
-  How to use it -- `tie_table`, `E_slopes_at`, what is certified, pitfalls -- and how to check any
-  value rigorously with `obd_core.reference` (e.g. `reference.tie(n, i, j)`): see the
-  [OBD-core README](https://github.com/dperlman/OBD-core#readme). Never re-derive the mathematics
-  here.
-- The numerical stack (numpy, numba, llvmlite, mpmath) is pinned to exact versions by OBD-core's
-  `constraints.txt`, which `requirements.txt` applies (`environment.yml` repeats the pins for
-  conda). With identical versions this repo and ordered-binomial-cusps compute bit-identical
-  results, and numba's compiled-code cache (which is per numba version) stays valid even if both
-  share an editable install. `import obd_core` warns if the environment differs.
-- Tie points are stored as Parquet (`data/tie_points/`, needs `pyarrow`); see
-  [OBD_data_map.md](OBD_data_map.md).
-- GUI is optional and only needed for GUI-based workflows:
-  - `pip install ".[gui]"`
-- Standard packaging/dependency metadata is in `pyproject.toml`.
+- **Environment.** The `obd` conda environment (`environment.yml`) or `pip install -r requirements.txt`.
+  Packaging metadata is in `pyproject.toml`.
+- **OBD-core.** `requirements.txt` installs OBD-core at a pinned release tag. To pick up a core
+  change, tag a release there and bump the pin here. How to use it (`tie_table`, `E_slopes_at`,
+  what is certified, pitfalls) and how to check any value rigorously with
+  `obd_core.reference` (e.g. `reference.tie(n, i, j)`): see the
+  [OBD-core README](https://github.com/dperlman/OBD-core#readme). Never re-derive the
+  mathematics here.
+- **One numerical stack.** numpy, numba, llvmlite and mpmath are pinned to exact versions by
+  OBD-core's `constraints.txt`, which `requirements.txt` applies (`environment.yml` repeats the
+  pins for conda). With identical versions this repo and ordered-binomial-cusps compute
+  bit-identical results, and numba's compiled-code cache, which is per numba version, stays
+  valid. `import obd_core` warns if the environment differs.
+- **Storage.** The tie tables are Parquet (`pyarrow`); the graph data is HDF5 (`h5py`).

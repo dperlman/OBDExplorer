@@ -50,7 +50,7 @@ def _html_payload_for_explorer2_3(
     if verbose and not tie_tables:
         man = tie_manifest or DEFAULT_TIE_OUTPUT
         print(
-            f"WARNING: No tie shard manifest at {man!r}; "
+            f"WARNING: No tie manifest at {man!r}; "
             "using analytic last-tie upper bounds where needed.\n",
             file=sys.stderr,
         )
