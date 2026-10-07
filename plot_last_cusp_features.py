@@ -4,6 +4,9 @@
 **Which row:** every row of the cusp table is a certified cusp; take the one with the **largest**
 ``p_float`` (the last cusp); if several tie on ``p``, pick the larger ``tie_index``.
 
+**Marks:** with both slopes on, each ``N`` gets one vertical line from the left slope to the right
+slope (the jump at the cusp; a zero line marks where it must cross); ``p`` is drawn as points only.
+
 **Y-axis assignment (precedence):** slopes (``PLOT_LEFT`` / ``PLOT_RIGHT``) then ``PLOT_P`` then
 ``PLOT_EV``. The first enabled group uses the main (left) y-axis; the second uses the first
 ``twinx`` on the right; the third uses a second ``twinx`` (spine offset when needed). Each axis
@@ -222,11 +225,18 @@ def main() -> None:
     ax_ev = ax_by_layer["ev"] if "ev" in ax_by_layer else None
 
     if PLOT_LEFT and ax_sl is not None:
-        (h,) = ax_sl.plot(ns, left_y, color="tab:blue", linewidth=1.5, marker=".", markersize=4)
-        legend_handles.append(h)
-        legend_labels.append("slope_left")
-    if PLOT_RIGHT and ax_sl is not None:
-        (h,) = ax_sl.plot(ns, right_y, color="tab:orange", linewidth=1.5, marker=".", markersize=4)
+        if PLOT_RIGHT:
+            # one vertical line per N, from the left slope up to the right slope: the jump at the cusp
+            h = ax_sl.vlines(ns, left_y, right_y, color="tab:blue", linewidth=1.0)
+            legend_handles.append(h)
+            legend_labels.append("slope_left to slope_right")
+            ax_sl.axhline(0.0, color="0.4", linewidth=0.8, zorder=0)
+        else:
+            (h,) = ax_sl.plot(ns, left_y, color="tab:blue", linestyle="none", marker=".", markersize=4)
+            legend_handles.append(h)
+            legend_labels.append("slope_left")
+    if PLOT_RIGHT and not PLOT_LEFT and ax_sl is not None:
+        (h,) = ax_sl.plot(ns, right_y, color="tab:orange", linestyle="none", marker=".", markersize=4)
         legend_handles.append(h)
         legend_labels.append("slope_right")
     if plot_slopes and ax_sl is not None:
@@ -240,7 +250,7 @@ def main() -> None:
             ax_sl.set_ylabel("slope at the last cusp")
 
     if PLOT_P and ax_p is not None:
-        (h,) = ax_p.plot(ns, p_y, color="tab:red", linewidth=1.5, marker=".", markersize=4)
+        (h,) = ax_p.plot(ns, p_y, color="tab:red", linestyle="none", marker=".", markersize=4)
         legend_handles.append(h)
         legend_labels.append("tie p, last cusp")
         _autoscale_ylim_from_series(ax_p, p_y)
