@@ -53,6 +53,10 @@ This repository is organized around a few workflows:
 - The shared core mathematics (tie points, slopes, certified cusps) comes from
   [OBD-core](https://github.com/dperlman/OBD-core), pinned to a release tag; `requirements.txt`
   installs that tag. To pick up a core change, tag a release there and bump the pin here.
+  How to use it -- `tie_table`, `E_slopes_at`, what is certified, pitfalls -- and how to check any
+  value rigorously with `obd_core.reference` (e.g. `reference.tie(n, i, j)`): see the
+  [OBD-core README](https://github.com/dperlman/OBD-core#readme). Never re-derive the mathematics
+  here.
 - The numerical stack (numpy, numba, llvmlite, mpmath) is pinned to exact versions by OBD-core's
   `constraints.txt`, which `requirements.txt` applies (`environment.yml` repeats the pins for
   conda). With identical versions this repo and ordered-binomial-cusps compute bit-identical

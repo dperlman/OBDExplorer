@@ -15,7 +15,7 @@ dependencies = [
   "mpmath",
   "numba",
   "pyarrow",
-  "obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.3.3",
+  "obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.4.0",
   "matplotlib",
   "plotly",
   "scikit-learn",

@@ -1,7 +1,7 @@
 # Core dependencies (non-GUI)
 # The numerical stack (numpy, numba, llvmlite, mpmath) is pinned by OBD-core, so this repo computes
 # bit-identical results to ordered-binomial-cusps; see https://github.com/dperlman/OBD-core
--c https://raw.githubusercontent.com/dperlman/OBD-core/v0.3.3/constraints.txt
+-c https://raw.githubusercontent.com/dperlman/OBD-core/v0.4.0/constraints.txt
 numpy
 scipy
 sympy
@@ -10,7 +10,7 @@ numba
 pyarrow
 # shared core mathematics (tie points, slopes, certified cusps); for development use
 #   pip install -e ../OBD-core
-obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.3.3
+obd-core @ git+https://github.com/dperlman/OBD-core.git@v0.4.0
 matplotlib
 plotly
 scikit-learn
