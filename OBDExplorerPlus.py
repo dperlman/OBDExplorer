@@ -13,6 +13,7 @@ import webbrowser
 
 from obd_explorer.constants import DEFAULT_GRAPH_P_STEPS
 from obd_explorer.model import TIE_COLOR_AXIS_CHOICES
+from obd_explorer.png_metadata import stamp_export
 
 # HTML colorscale choices: match GUI colormap names (see qt_graphics.CMAP_NAMES).
 HTML_COLOR_SCALE_CHOICES: tuple[str, ...] = (
@@ -1253,6 +1254,7 @@ def _run_export(args: argparse.Namespace) -> None:
     )
     _ensure_output_parent_dir(cfg.output_path)
     export_graph_headless(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
 
 
 def _run_heatmap_export(args: argparse.Namespace) -> None:
@@ -1282,6 +1284,7 @@ def _run_heatmap_export(args: argparse.Namespace) -> None:
     )
     _ensure_output_parent_dir(cfg.output_path)
     export_heatmap_headless(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
 
 
 def _run_tie_heatmap_export(args: argparse.Namespace) -> None:
@@ -1308,6 +1311,7 @@ def _run_tie_heatmap_export(args: argparse.Namespace) -> None:
     )
     _ensure_output_parent_dir(cfg.output_path)
     export_tie_heatmap_headless(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
 
 
 def _run_html(args: argparse.Namespace) -> None:

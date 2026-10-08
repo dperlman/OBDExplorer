@@ -75,8 +75,11 @@ python OBDExplorerPlus.py heatmap -o docs/plots/N-pHeatmapAnnotated.png --value 
 python OBDExplorerPlus.py tie-heatmap -o docs/plots/N-tieHeatmapExact.png --pixel-mode exact --value d --colormap hsv
 ```
 
-The three `N-pColorTieGraph*.png` plots were made with `export`; their exact settings were not
-recorded. Link any new page or plot from [`docs/index.html`](docs/index.html).
+The `export` graphs are listed with their commands in [docs/plots/README.md](docs/plots/README.md).
+Every PNG made by `OBDExplorerPlus.py` also records its command and all its settings inside the
+file (`python -m obd_explorer.png_metadata FILE.png` prints them), so any image can be rebuilt
+from itself. Link any new page or plot from [`docs/index.html`](docs/index.html), and add it to
+`docs/plots/README.md`.
 
 ## What's where
 
