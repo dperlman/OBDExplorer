@@ -99,8 +99,9 @@ def _git_commit(exclude: str | None = None) -> str:
         sha = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
         cmd = ["git", "-C", here, "diff", "--quiet", "HEAD", "--", ".",
                ":(exclude,glob)**/*.png", ":(exclude,glob)**/*.pdf", ":(exclude,glob)**/*.svg"]
-        if exclude is not None:
-            cmd.append(":(exclude)" + os.path.relpath(os.path.abspath(exclude), here))
+        rel = os.path.relpath(os.path.abspath(exclude), here) if exclude is not None else None
+        if rel is not None and not rel.startswith(".."):              # only a path inside the repo
+            cmd.append(":(exclude)" + rel)
         dirty = subprocess.run(cmd).returncode != 0
         return sha + ("+dirty" if dirty else "")
     except (OSError, subprocess.CalledProcessError):

@@ -36,7 +36,7 @@ subcommand directly (`--help` on each lists its options):
 | `python OBDExplorerPlus.py export -o FILE.png` | a static E/n graph with tie lines (PNG, PDF or SVG) |
 | `python OBDExplorerPlus.py heatmap -o FILE.png --value V` | an N–p heatmap: `d` (log₁₀ of the slope jump at the nearest tie point), `l`/`r` (slopes), `i`/`j` (the pair), `ev_n` (E/n), `eslope_n` (the exact slope E′/n) |
 | `python OBDExplorerPlus.py tie-heatmap -o FILE.png --value V` | an N–tie-index heatmap of the same tie values |
-| `python OBDExplorerPlus.py cusp-proximity -o FILE.png --r R` | for each p, the first n with a cusp within r of p (points, log n); several `--r` values overlay; p that no n reaches sit on a pale row at the top. p runs from 0.5 to 0.657, above every cusp found (ordered-binomial-cusps FACTS S5). `--cusps-csv` adds that repo's certified catalogue `cusps/cusps_all.csv` for n = 1001–5000 |
+| `python OBDExplorerPlus.py cusp-proximity -o FILE.png --r R` | for each p, the first n with a cusp within r of p (points, log n); several `--r` values overlay, and `--scale-sqrt-r` plots (first n)·√r so they collapse together; p that no n reaches sit on a pale row at the top. p runs from 0.5 to 0.657, above every cusp found (ordered-binomial-cusps FACTS S5). `--cusps-csv` adds that repo's certified catalogue `cusps/cusps_all.csv` for n = 1001–5000 |
 | `python OBDExplorerPlus.py gui` | the interactive desktop explorer (needs the GUI extras) |
 
 Analysis plots: `python plot_last_cusp_features.py` (features of the last cusp against n) and
@@ -78,6 +78,7 @@ python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-3.p
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-4.png --r 0.0001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-5.png --r 0.00001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-6.png --r 0.000001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --points-per-r 20 --marker-size 0.1 --dpi 600
+python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR-scaled.png --r 0.001 0.0001 0.00001 0.000001 --scale-sqrt-r --points-per-r 20 --marker-size 0.1 --dpi 600 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 ```
 
 The `export` graphs are listed with their commands in [docs/plots/README.md](docs/plots/README.md).

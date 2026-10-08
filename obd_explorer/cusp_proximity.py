@@ -7,6 +7,11 @@ nothing is recomputed.  Each grid p is exact for the data: the smallest n of the
 largest n available is "not reached".  Every cusp found so far has p* < 0.657 (ordered-binomial-cusps
 FACTS S5, n <= 5000), so p_max defaults to 0.657.
 
+``scale_sqrt_r`` plots N_r(p) * sqrt(r) instead.  Across the band its median is about 0.53 at every r
+from 1e-3 to 1e-6, what cusps scattered at random with density ~2.3 per unit p per n would give
+(median sqrt(ln 2 / (2.3 r))), so several r collapse onto one picture and what departs from that
+(the spikes at simple fractions, the edge near 1/2) stands out.
+
 ``cusps_csv`` extends the data past the cusp table with ordered-binomial-cusps' certified catalogue
 ``cusps/cusps_all.csv`` (n = 3..5000; columns ``n`` and ``pstar``, the cusps with p* > 1/2): its rows
 for n above the cusp table's last n are added, with their mirror images 1 - p* and the center cusp
@@ -30,8 +35,9 @@ class CuspProximityExportConfig:
     r_values: tuple[float, ...] = (0.001,)
     p_min: float = 0.5
     p_max: float = 0.657
-    p_steps: int | None = None          # None: points_per_r points per r, for the smallest r
+    p_steps: int | None = None          # None: spacing r / points_per_r, separately for each r
     points_per_r: float = 10.0
+    scale_sqrt_r: bool = False          # plot N_r(p) * sqrt(r)
     n_max: int | None = None            # None: every n in the cusp table
     log_n: bool = True
     marker_size: float = 2.0
@@ -90,10 +96,10 @@ def load_cusps(cfg: CuspProximityExportConfig) -> tuple[np.ndarray, np.ndarray, 
     return cusp_n, cusp_p, n_table
 
 
-def _grid(cfg: CuspProximityExportConfig) -> np.ndarray:
+def _grid(cfg: CuspProximityExportConfig, r: float) -> np.ndarray:
     steps = cfg.p_steps
     if steps is None:
-        steps = int(math.ceil((cfg.p_max - cfg.p_min) / (min(cfg.r_values) / cfg.points_per_r) - 1e-9)) + 1
+        steps = int(math.ceil((cfg.p_max - cfg.p_min) / (r / cfg.points_per_r) - 1e-9)) + 1
     return np.linspace(cfg.p_min, cfg.p_max, steps)
 
 
@@ -113,53 +119,86 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
 
     cusp_n, cusp_p, n_table = load_cusps(cfg)
     n_top = int(cusp_n.max())
-    grid = _grid(cfg)
+    r_min = min(cfg.r_values)
 
-    r_sorted = sorted(cfg.r_values, reverse=True)   # largest r first: its n are lowest
+    # Smallest r first: it has the most points; the sparser grids of larger r draw on top of it.
+    r_sorted = sorted(cfg.r_values)
     if len(r_sorted) == 1:
         colors = ["#1f5fa8"]
     else:
         cmap = plt.get_cmap("viridis")
-        colors = [cmap(k / (len(r_sorted) - 1) * 0.9) for k in range(len(r_sorted))]
+        colors = [cmap(0.9 * (1 - k / (len(r_sorted) - 1))) for k in range(len(r_sorted))]
+    # With r / points_per_r spacing, a larger r has fewer points; larger marks keep it visible.
+    sizes = {r: cfg.marker_size * math.sqrt(r / r_min) for r in r_sorted} if cfg.p_steps is None \
+        else {r: cfg.marker_size for r in r_sorted}
+    scale = {r: math.sqrt(r) if cfg.scale_sqrt_r else 1.0 for r in r_sorted}
+    ceiling = {r: n_top * scale[r] for r in r_sorted}           # n_top in plotted units
 
     fig, ax = plt.subplots(figsize=(cfg.width_in, cfg.height_in), facecolor=FIGURE_BACKGROUND)
-    unreached_y = n_top * (1.6 if cfg.log_n else 1.06)
+    top = max(ceiling.values())
+    unreached_y = top * (1.6 if cfg.log_n else 1.06)
     any_unreached = False
+    n_points = {}
+    medians = []
     for r, color in zip(r_sorted, colors):
+        grid = _grid(cfg, r)
+        n_points[r] = grid.size
         first = first_n_within_r(cusp_n, cusp_p, grid, r)
         hit = first > 0
-        label = f"$r = {_format_r(r)}$"
-        ax.scatter(grid[hit], first[hit], s=cfg.marker_size, lw=0, color=color, label=label, rasterized=True)
+        y = first[hit] * scale[r]
+        ax.scatter(grid[hit], y, s=sizes[r], lw=0, color=color, rasterized=True)
+        if hit.any():
+            medians.append(float(np.median(y)))
         if (~hit).any():
             any_unreached = True
             pale = tuple(0.65 + 0.35 * v for v in to_rgb(color))   # opaque, so stacked points stay pale
-            ax.scatter(grid[~hit], np.full((~hit).sum(), unreached_y), s=cfg.marker_size, lw=0, color=pale,
+            ax.scatter(grid[~hit], np.full((~hit).sum(), unreached_y), s=sizes[r], lw=0, color=pale,
                        rasterized=True)
+        if cfg.scale_sqrt_r or len(r_sorted) == 1:
+            ax.axhline(ceiling[r], color=color if len(r_sorted) > 1 else "0.6", lw=0.6, ls=":")
         if verbose:
             reached = grid[hit]
             print(f"r = {r:g}: {hit.sum()} of {grid.size} p reached by n <= {n_top}"
-                  + (f" (largest n needed {first[hit].max()}, last p reached {reached.max():.6f})" if hit.any() else ""))
+                  + (f" (largest n needed {first[hit].max()}, last p reached {reached.max():.6f}, "
+                     f"median n*sqrt(r) {np.median(first[hit]) * math.sqrt(r):.3f})" if hit.any() else ""))
 
     if cfg.log_n:
         ax.set_yscale("log")
-    ax.axhline(n_top, color="0.6", lw=0.6, ls=":")
+    if not cfg.scale_sqrt_r and len(r_sorted) > 1:
+        ax.axhline(n_top, color="0.6", lw=0.6, ls=":")
+    if cfg.scale_sqrt_r and medians:
+        med = float(np.median(medians))
+        ax.axhline(med, color="0.35", lw=0.7, ls="--")
+        ax.text(cfg.p_max - 0.01 * (cfg.p_max - cfg.p_min), med, f"median ≈ {med:.2f}", ha="right", va="center",
+                fontsize=9, color="0.2", bbox=dict(facecolor="white", edgecolor="0.6", lw=0.5, pad=2))
     if any_unreached:
         ax.text(cfg.p_min, unreached_y, f"  pale points: none up to n = {n_top}", ha="left", va="center",
                 fontsize=9, color="0.35")
     ax.set_xlim(cfg.p_min - 0.005 * (cfg.p_max - cfg.p_min), cfg.p_max + 0.005 * (cfg.p_max - cfg.p_min))
+    y_floor = (1.5 if not cfg.scale_sqrt_r else 1.5 * math.sqrt(r_min))
     if cfg.log_n:
-        ax.set_ylim(1.5, unreached_y * 1.8 if any_unreached else n_top * 1.3)
+        ax.set_ylim(y_floor, unreached_y * 1.8 if any_unreached else top * 1.3)
     else:
-        ax.set_ylim(0, unreached_y * 1.05 if any_unreached else n_top * 1.02)
+        ax.set_ylim(0, unreached_y * 1.05 if any_unreached else top * 1.02)
     ax.set_xlabel("p")
-    ax.set_ylabel("first n with a cusp within r of p")
+    ax.set_ylabel("(first n with a cusp within r of p) × √r" if cfg.scale_sqrt_r
+                  else "first n with a cusp within r of p")
     r_text = ", ".join(f"${_format_r(r)}$" for r in sorted(cfg.r_values, reverse=True))
-    ax.set_title(f"How far up n must go before a cusp comes within r of p  (r = {r_text}; "
-                 f"{grid.size} values of p; cusps of n = 2–{n_top})"
+    pts = (f"{n_points[r_sorted[0]]} values of p" if len(r_sorted) == 1
+           else f"p spacing r/{cfg.points_per_r:g}" if cfg.p_steps is None else f"{cfg.p_steps} values of p")
+    head = ("First n with a cusp within r of p, times √r" if cfg.scale_sqrt_r
+            else "How far up n must go before a cusp comes within r of p")
+    ax.set_title(f"{head}  (r = {r_text}; {pts}; cusps of n = 2–{n_top})"
                  + (f"\ncusps for n ≤ {n_table}: OBD tie tables; n = {n_table + 1}–{n_top}: ordered-binomial-cusps "
-                    "catalogue (identical for n ≤ 1000)" if n_top > n_table else ""), fontsize=11)
+                    "catalogue (identical for n ≤ 1000)" if n_top > n_table else "")
+                 + ("\ndotted lines: n = " + str(n_top) + " for each r" if cfg.scale_sqrt_r and len(r_sorted) > 1 else ""),
+                 fontsize=11)
     if len(r_sorted) > 1:
-        ax.legend(markerscale=4, loc="center right", frameon=False)
+        from matplotlib.lines import Line2D
+
+        handles = [Line2D([], [], ls="", marker="o", ms=5, color=c, label=f"$r = {_format_r(r)}$")
+                   for r, c in sorted(zip(r_sorted, colors), reverse=True)]
+        ax.legend(handles=handles, loc="lower right", frameon=True, framealpha=0.9)
     ax.grid(True, which="major", color="0.9", lw=0.6)
     fig.tight_layout()
     fig.savefig(cfg.output_path, dpi=cfg.dpi, facecolor=FIGURE_BACKGROUND)

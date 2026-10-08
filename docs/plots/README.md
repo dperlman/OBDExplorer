@@ -21,6 +21,7 @@ python -m obd_explorer.png_metadata docs/plots/N-pColorTieGraphFull.png
 | `N-pFirstCuspWithinR1e-4.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-4.png --r 0.0001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
 | `N-pFirstCuspWithinR1e-5.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-5.png --r 0.00001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
 | `N-pFirstCuspWithinR1e-6.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-6.png --r 0.000001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --points-per-r 20 --marker-size 0.1 --dpi 600` |
+| `N-pFirstCuspWithinR-scaled.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR-scaled.png --r 0.001 0.0001 0.00001 0.000001 --scale-sqrt-r --points-per-r 20 --marker-size 0.1 --dpi 600 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
 
 The `N-pFirstCuspWithinR` plots also read the certified cusp catalogue of
 [ordered-binomial-cusps](https://github.com/dperlman/ordered-binomial-cusps) (`cusps/cusps_all.csv`,
