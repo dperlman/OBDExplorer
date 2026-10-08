@@ -152,6 +152,9 @@ windowed tie tables (`tie_table(n, p_range=[windows])`, obd-core >= 0.6.0).
 | `coverage/part-*.parquet` | `n` int32, `lo`, `hi` float64, `min_pair_mass` float64 | every tie point of n with lo ≤ p\* ≤ hi was examined; `min_pair_mass` 0 for a complete search, else the threshold used |
 | `cusps/part-*.parquet` | `n` int32, `i`, `j` int32, `pstar` float64, `decided_by` string | the certified cusps (p\* > ½) found in those intervals |
 
+`data/tie_windows/` has the same layout for `--points ties`, with `ties/` instead of `cusps/`:
+every tie point (p\* > ½) found in the searched intervals.
+
 A run computes only the parts of its windows that no usable coverage holds, so rerunning a plot
 takes seconds and an interrupted run resumes. Coverage from a search with `min_pair_mass` m is used
 only by runs with `min_pair_mass` ≥ m, so a filtered search never stands in for a complete one.

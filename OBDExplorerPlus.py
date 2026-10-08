@@ -1317,10 +1317,12 @@ def _run_tie_heatmap_export(args: argparse.Namespace) -> None:
 def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
     from obd_explorer.cusp_proximity import CuspProximityExportConfig, export_cusp_proximity
 
+    ties = args.points == "ties"
     cfg = CuspProximityExportConfig(
         r_values=tuple(args.r),
         p_min=args.p_min,
-        p_max=args.p_max,
+        p_max=args.p_max if args.p_max is not None else (1.0 if ties else 0.657),
+        points=args.points,
         p_steps=args.p_steps,
         points_per_r=args.points_per_r,
         r_power=args.r_power,
@@ -1333,10 +1335,11 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         cusp_table=args.cusp_table,
         cusps_csv=args.cusps_csv,
         extend_to=args.extend_to,
-        extend_p_max=args.extend_p_max,
+        extend_p_max=args.extend_p_max if args.extend_p_max is not None else (1.0 if ties else 0.6525),
         min_pair_mass=args.min_pair_mass,
         workers=args.workers,
-        window_cache=None if args.no_window_cache else args.window_cache,
+        window_cache=None if args.no_window_cache else (
+            args.window_cache or os.path.join("data", "tie_windows" if ties else "cusp_windows")),
         output_path=_resolved_export_output_path(args.output, "png"),
     )
     _ensure_output_parent_dir(cfg.output_path)
@@ -1751,7 +1754,18 @@ def main() -> None:
         help="Distance r (default 0.001). Several values overlay, e.g. --r 0.01 0.001 0.0001.",
     )
     p_cp.add_argument("--p-min", type=float, default=0.5)
-    p_cp.add_argument("--p-max", type=float, default=0.657, help="Default 0.657: no cusp found above it (cusps repo FACTS S5).")
+    p_cp.add_argument(
+        "--points",
+        choices=("cusps", "ties"),
+        default="cusps",
+        help="Which points p waits for: cusps (default) or every tie point.",
+    )
+    p_cp.add_argument(
+        "--p-max",
+        type=float,
+        default=None,
+        help="Default 0.657 for cusps (no cusp found above it, cusps repo FACTS S5), 1 for ties.",
+    )
     p_cp.add_argument(
         "--p-steps",
         type=int,
@@ -1787,8 +1801,8 @@ def main() -> None:
     p_cp.add_argument(
         "--extend-p-max",
         type=float,
-        default=0.6525,
-        help="Only search p up to this (default 0.6525: no cusp past it for n > 1250 so far, FACTS S5).",
+        default=None,
+        help="Only search p up to this (default 0.6525 for cusps: none past it for n > 1250 so far, FACTS S5; 1 for ties).",
     )
     p_cp.add_argument(
         "--min-pair-mass",
@@ -1799,8 +1813,9 @@ def main() -> None:
     p_cp.add_argument("--workers", type=int, default=8, help="Processes for --extend-to.")
     p_cp.add_argument(
         "--window-cache",
-        default=os.path.join("data", "cusp_windows"),
-        help="Where --extend-to keeps what it has searched and found, so later runs reuse it (default data/cusp_windows).",
+        default=None,
+        help="Where --extend-to keeps what it has searched and found, so later runs reuse it "
+        "(default data/cusp_windows, or data/tie_windows with --points ties).",
     )
     p_cp.add_argument("--no-window-cache", action="store_true", help="Neither read nor write the window cache.")
     p_cp.add_argument("--width-in", type=float, default=12.0)

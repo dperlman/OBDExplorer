@@ -19,6 +19,13 @@ The search is cached in ``window_cache`` (default ``data/cusp_windows/``, see Wi
 each n, the p intervals already searched and the cusps found in them.  A later run computes only
 what its windows add, so rerunning a plot takes seconds and an interrupted run resumes.
 
+``points = "ties"`` asks the same about tie points instead of cusps: the first n with ANY tie point
+within r of p.  For n <= 1000 it streams OBD's tie tables (data/tie_points, read one n at a time,
+p column only); past them the windowed search keeps every tie point found, not just the cusps
+(cache data/tie_windows).  Tie points fill (1/2, 1) about n^2/4 per n, so most p are reached by
+n ~ (3 ln 2 / r)^(1/3); the slow places are the two edges, above 1/2 (the first tie point is at
+1/2 + ~1/(2(n+1))) and below 1 (the last is at n/(n+1)).
+
 ``r_power`` = k plots N_r(p) * r^k instead.  With k = 1/2: across the band the median is about 0.53 at every r
 from 1e-3 to 1e-6, what cusps scattered at random with density ~2.3 per unit p per n would give
 (median sqrt(ln 2 / (2.3 r))), so several r collapse onto one picture and what departs from that
@@ -47,7 +54,8 @@ from obd_explorer.constants import FIGURE_BACKGROUND
 class CuspProximityExportConfig:
     r_values: tuple[float, ...] = (0.001,)
     p_min: float = 0.5
-    p_max: float = 0.657
+    p_max: float = 0.657                # 1.0 for points="ties"
+    points: str = "cusps"               # "cusps" or "ties": which points p waits for
     p_steps: int | None = None          # None: spacing r / points_per_r, separately for each r
     points_per_r: float = 10.0
     r_power: float = 0.0                # plot N_r(p) * r**r_power
@@ -60,7 +68,7 @@ class CuspProximityExportConfig:
     cusp_table: str | None = None
     cusps_csv: str | None = None        # ordered-binomial-cusps' cusps_all.csv, for n past the table
     extend_to: int | None = None        # search on with windowed tie tables up to this n
-    extend_p_max: float = 0.6525        # ... but only for p up to this
+    extend_p_max: float = 0.6525        # ... but only for p up to this (1.0 for points="ties")
     min_pair_mass: float | None = None  # passed to tie_table: faster, not proved complete
     workers: int = 8
     window_cache: str | None = os.path.join("data", "cusp_windows")   # None: no cache
@@ -90,13 +98,13 @@ CACHE_FORMAT = "obd.cusp_windows.parquet.v1"
 
 
 def _window_cusps(task):
-    """The cusps (p* > 1/2) of one n inside the windows: one windowed tie table for all of them.
-    Returns (n, windows, i, j, pstar, decided_by)."""
+    """The cusps (points="cusps") or all tie points ("ties") with p* > 1/2 of one n inside the
+    windows: one windowed tie table for all of them.  Returns (n, windows, i, j, pstar, decided_by)."""
     import obd_core
 
-    n, windows, min_pair_mass = task
+    n, windows, min_pair_mass, points = task
     t = obd_core.tie_table(n, p_range=windows, min_pair_mass=min_pair_mass)
-    c = t["is_cusp"]
+    c = t["is_cusp"] if points == "cusps" else np.ones(len(t["i"]), bool)
     return n, windows, t["i"][c], t["j"][c], t["pstar"][c], t["decided_by"][c].astype(str)
 
 
@@ -129,13 +137,13 @@ def _subtract(wins, cov) -> list[tuple[float, float]]:
 
 
 class WindowCache:
-    """Cusps found by windowed searches (``extend_first_n``), with the p intervals searched for each n.
+    """Points found by windowed searches (``extend_first_n``), with the p intervals searched for each n.
 
     A directory of Parquet parts, one pair per block of n written:
         coverage/part-*.parquet   n (int32), lo, hi (float64), min_pair_mass (float64; 0 = complete
                                   search): every tie point of n with lo <= p* <= hi was examined
         cusps/part-*.parquet      n (int32), i, j (int32), pstar (float64), decided_by (string): the
-                                  certified cusps found there
+        (ties/ for points="ties") certified cusps found there (every tie point, for "ties")
     Schema metadata: format (CACHE_FORMAT), obd_core_version, created_at.  Parts are written whole
     to a temporary name and renamed, so an interrupted run leaves only complete parts.
 
@@ -144,15 +152,16 @@ class WindowCache:
     cusps themselves are certified either way and are always used.
     """
 
-    def __init__(self, path: str, min_pair_mass: float | None = None):
+    def __init__(self, path: str, min_pair_mass: float | None = None, points: str = "cusps"):
         import pyarrow.parquet as pq
 
         self.path = path
+        self.sub = points                      # "cusps" or "ties": the subdirectory of found points
         self.tau = float(min_pair_mass or 0.0)
         self.cov: dict[int, list[list[float]]] = {}
         self.cusp_p: dict[int, np.ndarray] = {}
         self._pending: list[tuple] = []
-        for sub in ("coverage", "cusps"):
+        for sub in ("coverage", self.sub):
             os.makedirs(os.path.join(path, sub), exist_ok=True)
         raw: dict[int, list] = {}
         for name in sorted(os.listdir(os.path.join(path, "coverage"))):
@@ -167,10 +176,10 @@ class WindowCache:
                 raw.setdefault(a, []).append((b, c))
         self.cov = {k: _merge(v) for k, v in raw.items()}
         ps: dict[int, list] = {}
-        for name in sorted(os.listdir(os.path.join(path, "cusps"))):
+        for name in sorted(os.listdir(os.path.join(path, self.sub))):
             if not name.endswith(".parquet"):
                 continue
-            t = pq.read_table(os.path.join(path, "cusps", name), columns=["n", "pstar"])
+            t = pq.read_table(os.path.join(path, self.sub, name), columns=["n", "pstar"])
             for a, b in zip(t["n"].to_numpy().tolist(), t["pstar"].to_numpy().tolist()):
                 ps.setdefault(a, []).append(b)
         self.cusp_p = {k: np.unique(v) for k, v in ps.items()}
@@ -216,7 +225,7 @@ class WindowCache:
         ns = [r[0] for r in self._pending]
         stem = f"part-{min(ns):06d}-{max(ns):06d}-{time.time_ns()}"
         # cusps first: coverage without its cusps would hide them, cusps without coverage are harmless
-        for sub, tbl in (("cusps", cus), ("coverage", cov)):
+        for sub, tbl in ((self.sub, cus), ("coverage", cov)):
             final = os.path.join(self.path, sub, stem + ".parquet")
             pq.write_table(tbl.replace_schema_metadata(meta), final + ".tmp", compression="zstd")
             os.replace(final + ".tmp", final)
@@ -237,7 +246,7 @@ def _windows(points: np.ndarray, r: float, p_floor: float) -> list[tuple[float, 
 
 def extend_first_n(first: np.ndarray, grid: np.ndarray, r: float, n_from: int, n_to: int, *,
                    p_max: float, min_pair_mass: float | None = None, workers: int = 8,
-                   cache: str | None = None, verbose: bool = False) -> np.ndarray:
+                   cache: str | None = None, points: str = "cusps", verbose: bool = False) -> np.ndarray:
     """Fill in ``first`` (0 = not reached) for n = n_from+1 .. n_to, searching only near the p not
     yet reached (p <= p_max), with windowed tie tables.  ``cache``: a WindowCache directory, read
     for what earlier runs searched and appended to after every block.  Returns the updated copy."""
@@ -247,7 +256,7 @@ def extend_first_n(first: np.ndarray, grid: np.ndarray, r: float, n_from: int, n
     first = first.copy()
     block = 4 * workers
     t0 = time.time()
-    wc = WindowCache(cache, min_pair_mass) if cache else None
+    wc = WindowCache(cache, min_pair_mass, points) if cache else None
     computed = 0
     with ProcessPoolExecutor(max_workers=workers) as ex:
         n = n_from + 1
@@ -257,7 +266,7 @@ def extend_first_n(first: np.ndarray, grid: np.ndarray, r: float, n_from: int, n
                 break
             wins = _windows(grid[todo], r, 0.5)
             ns = list(range(n, min(n + block, n_to + 1)))
-            tasks = [(k, wc.gaps(k, wins) if wc else wins, min_pair_mass) for k in ns]
+            tasks = [(k, wc.gaps(k, wins) if wc else wins, min_pair_mass, points) for k in ns]
             tasks = [t for t in tasks if t[1]]
             found = {k: np.empty(0) for k in ns}
             for res in ex.map(_window_cusps, tasks):
@@ -284,6 +293,27 @@ def extend_first_n(first: np.ndarray, grid: np.ndarray, r: float, n_from: int, n
                       f"{computed} n computed (rest from the cache), {time.time() - t0:.0f}s")
             n = ns[-1] + 1
     return first
+
+
+def first_n_from_tie_tables(grid: np.ndarray, r: float, n_max: int | None = None,
+                            manifest: str | None = None) -> tuple[np.ndarray, int]:
+    """For each grid p, the smallest n <= n_max with a tie point within r of p (0: none), streaming
+    OBD's tie tables one n at a time (p column only).  Returns (first, the last n read)."""
+    from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_tables, load_tie_manifest
+
+    man = manifest or DEFAULT_TIE_OUTPUT
+    ns = sorted(int(k) for k in load_tie_manifest(man)["n_entries"])
+    ns = [n for n in ns if n_max is None or n <= n_max]
+    first = np.zeros(grid.size, np.int64)
+    for n, tab in iter_tie_tables(man, n_list=ns, columns=["p"]):
+        todo = np.flatnonzero(first == 0)
+        if todo.size == 0:
+            break
+        c, x = tab["p"], grid[todo]
+        k = np.searchsorted(c, x)
+        d = np.minimum(np.abs(x - c[np.clip(k - 1, 0, c.size - 1)]), np.abs(c[np.clip(k, 0, c.size - 1)] - x))
+        first[todo[d <= r]] = n
+    return first, ns[-1]
 
 
 def load_cusps(cfg: CuspProximityExportConfig) -> tuple[np.ndarray, np.ndarray, int]:
@@ -335,8 +365,16 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
     import matplotlib.pyplot as plt
     from matplotlib.colors import to_rgb
 
-    cusp_n, cusp_p, n_table = load_cusps(cfg)
-    n_data = int(cusp_n.max())
+    ties = cfg.points == "ties"
+    word = "tie point" if ties else "cusp"
+    if ties:
+        from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, load_tie_manifest
+
+        avail = [int(k) for k in load_tie_manifest(DEFAULT_TIE_OUTPUT)["n_entries"]]
+        n_table = n_data = max(k for k in avail if cfg.n_max is None or k <= cfg.n_max)
+    else:
+        cusp_n, cusp_p, n_table = load_cusps(cfg)
+        n_data = int(cusp_n.max())
     n_top = max(n_data, cfg.extend_to or 0)
     r_min = min(cfg.r_values)
 
@@ -363,11 +401,14 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
     for r, color in zip(r_sorted, colors):
         grid = _grid(cfg, r)
         n_points[r] = grid.size
-        first = first_n_within_r(cusp_n, cusp_p, grid, r)
+        if ties:
+            first, _ = first_n_from_tie_tables(grid, r, n_max=n_data)
+        else:
+            first = first_n_within_r(cusp_n, cusp_p, grid, r)
         if cfg.extend_to is not None and cfg.extend_to > n_data:
             first = extend_first_n(first, grid, r, n_data, cfg.extend_to, p_max=cfg.extend_p_max,
                                    min_pair_mass=cfg.min_pair_mass, workers=cfg.workers,
-                                   cache=cfg.window_cache, verbose=verbose)
+                                   cache=cfg.window_cache, points=cfg.points, verbose=verbose)
         hit = first > 0
         y = first[hit] * scale[r]
         ax.scatter(grid[hit], y, s=sizes[r], lw=0, color=color, rasterized=True)
@@ -406,16 +447,17 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
         ax.set_ylim(0, unreached_y * 1.05 if any_unreached else top * 1.02)
     ax.set_xlabel("p")
     factor = {0.5: "√r", 1.0: "r"}.get(cfg.r_power, f"r^{cfg.r_power:g}")
-    ax.set_ylabel(f"(first n with a cusp within r of p) × {factor}" if scaled
-                  else "first n with a cusp within r of p")
+    ax.set_ylabel(f"(first n with a {word} within r of p) × {factor}" if scaled
+                  else f"first n with a {word} within r of p")
     r_text = ", ".join(f"${_format_r(r)}$" for r in sorted(cfg.r_values, reverse=True))
     pts = (f"{n_points[r_sorted[0]]} values of p" if len(r_sorted) == 1
            else f"p spacing r/{cfg.points_per_r:g}" if cfg.p_steps is None else f"{cfg.p_steps} values of p")
-    head = (f"First n with a cusp within r of p, times {factor}" if scaled
-            else "How far up n must go before a cusp comes within r of p")
-    ax.set_title(f"{head}  (r = {r_text}; {pts}; cusps of n = 2–{n_top})"
+    head = (f"First n with a {word} within r of p, times {factor}" if scaled
+            else f"How far up n must go before a {word} comes within r of p")
+    ax.set_title(f"{head}  (r = {r_text}; {pts}; {word}s of n = 2–{n_top})"
                  + (f"\ncusps for n ≤ {n_table}: OBD tie tables; n = {n_table + 1}–{n_data}: ordered-binomial-cusps "
                     "catalogue (identical for n ≤ 1000)" if n_data > n_table else "")
+                 + (f"\ntie points for n ≤ {n_data}: OBD tie tables" if ties else "")
                  + (f"\nn = {n_data + 1}–{n_top}: windowed search near the p not yet reached, p ≤ {cfg.extend_p_max:g}"
                     + (f", pairs with f(i) ≥ {cfg.min_pair_mass:g} only" if cfg.min_pair_mass else "")
                     if n_top > n_data else "")
