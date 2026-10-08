@@ -90,6 +90,7 @@ python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-6-d
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-6-density-0.60-0.62.png --r 0.000001 --p-min 0.6 --p-max 0.62 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --dpi 600 --extend-to 20000 --render density
 python OBDExplorerPlus.py proximity-map -o docs/plots/N-pFirstCuspWithinRMap.png --points cusps --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py proximity-map -o docs/plots/N-pFirstTieWithinRMap.png --points ties
+python OBDExplorerPlus.py proximity-map -o docs/plots/N-pFirstCuspWithinRMap-0.59-0.61.png --points cusps --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --p-min 0.59 --p-max 0.61 --label-denominator 30
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR-scaled.png --r 0.001 0.0001 0.00001 0.000001 --scale-sqrt-r --points-per-r 20 --marker-size 0.1 --dpi 600 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR-timesR.png --r 0.001 0.0001 0.00001 0.000001 --r-power 1 --points-per-r 20 --marker-size 0.1 --dpi 600 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 ```
