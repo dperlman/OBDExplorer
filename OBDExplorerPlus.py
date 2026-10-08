@@ -1326,6 +1326,9 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         p_steps=args.p_steps,
         points_per_r=args.points_per_r,
         r_power=args.r_power,
+        render=args.render,
+        gamma=args.gamma,
+        floor=args.floor,
         n_max=args.n_max,
         log_n=args.log_n,
         marker_size=args.marker_size,
@@ -1782,6 +1785,15 @@ def main() -> None:
         "K = 1 the edge near 1/2 and the spikes at simple fractions.",
     )
     p_cp.add_argument("--scale-sqrt-r", action="store_const", const=0.5, dest="r_power", help="Same as --r-power 0.5.")
+    p_cp.add_argument(
+        "--render",
+        choices=("points", "density"),
+        default="points",
+        help="points: a marker per sampled p. density: an image, one pixel per output pixel, each shaded by the "
+        "share of its column's samples in that row (crisp at any zoom; one r at a time).",
+    )
+    p_cp.add_argument("--gamma", type=float, default=0.5, help="Density: darkness grows as (share / 99th percentile) ** gamma (default 0.5).")
+    p_cp.add_argument("--floor", type=float, default=0.6, help="Density: shade of a pixel holding a single sample (default 0.6).")
     p_cp.add_argument("--log-n", action="store_true", default=True, help="Log scale for n (default).")
     p_cp.add_argument("--linear-n", action="store_false", dest="log_n", help="Linear scale for n.")
     p_cp.add_argument("--marker-size", type=float, default=2.0, help="Point area in points^2.")
