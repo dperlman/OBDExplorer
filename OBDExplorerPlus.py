@@ -1314,6 +1314,28 @@ def _run_tie_heatmap_export(args: argparse.Namespace) -> None:
     stamp_export(cfg.output_path, cfg, args)
 
 
+def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
+    from obd_explorer.cusp_proximity import CuspProximityExportConfig, export_cusp_proximity
+
+    cfg = CuspProximityExportConfig(
+        r_values=tuple(args.r),
+        p_min=args.p_min,
+        p_max=args.p_max,
+        p_steps=args.p_steps,
+        n_max=args.n_max,
+        log_n=args.log_n,
+        marker_size=args.marker_size,
+        width_in=args.width_in,
+        height_in=args.height_in,
+        dpi=args.dpi,
+        cusp_table=args.cusp_table,
+        output_path=_resolved_export_output_path(args.output, "png"),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_cusp_proximity(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
+
+
 def _run_html(args: argparse.Namespace) -> None:
     raw_out = getattr(args, "output", None)
     if raw_out is None or not str(raw_out).strip():
@@ -1708,6 +1730,35 @@ def main() -> None:
     p_thm.add_argument("--height-in", type=float, default=10.0)
     p_thm.add_argument("--dpi", type=int, default=400)
 
+    p_cp = sub.add_parser(
+        "cusp-proximity",
+        help="For each p, the first n with a cusp within r of p (points; from the cusp table, PNG).",
+    )
+    p_cp.add_argument("-o", "--output", required=True)
+    p_cp.add_argument(
+        "--r",
+        type=float,
+        nargs="+",
+        default=[0.001],
+        help="Distance r (default 0.001). Several values overlay, e.g. --r 0.01 0.001 0.0001.",
+    )
+    p_cp.add_argument("--p-min", type=float, default=0.5)
+    p_cp.add_argument("--p-max", type=float, default=1.0)
+    p_cp.add_argument(
+        "--p-steps",
+        type=int,
+        default=None,
+        help="Number of p values (default: spacing r/10 for the smallest r).",
+    )
+    p_cp.add_argument("--n-max", type=int, default=None, help="Use only cusps of n <= this (default: the whole table).")
+    p_cp.add_argument("--log-n", action="store_true", default=True, help="Log scale for n (default).")
+    p_cp.add_argument("--linear-n", action="store_false", dest="log_n", help="Linear scale for n.")
+    p_cp.add_argument("--marker-size", type=float, default=2.0, help="Point area in points^2.")
+    p_cp.add_argument("--cusp-table", default=None, help="Cusp table (Parquet) path.")
+    p_cp.add_argument("--width-in", type=float, default=12.0)
+    p_cp.add_argument("--height-in", type=float, default=7.0)
+    p_cp.add_argument("--dpi", type=int, default=300)
+
     args = parser.parse_args()
     if args.cmd is None:
         _interactive()
@@ -1722,6 +1773,8 @@ def main() -> None:
         _run_heatmap_export(args)
     elif args.cmd == "tie-heatmap":
         _run_tie_heatmap_export(args)
+    elif args.cmd == "cusp-proximity":
+        _run_cusp_proximity_export(args)
 
 
 if __name__ == "__main__":

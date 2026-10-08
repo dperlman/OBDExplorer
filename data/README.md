@@ -13,7 +13,7 @@ anything already built; to rebuild one part from scratch, delete it first.
 | what | path | size | built by | used by |
 |---|---|---|---|---|
 | tie tables: every tie point of each n = 2–1000, with E, exact slopes, log₁₀ D and certified cusp flags | `tie_points/n=NNNNN/part.parquet` + `tie_points/manifest.json` | 5.1 GB | `--save-tie-points` (~2 min) | explorers 5–7, heatmaps, Qt GUI tie lines, cusp table |
-| cusp table: every certified cusp of every n | `tie_cusps.parquet` | 12 MB | `--save-cusp-data` (~6 s) | `plot_last_cusp_features.py` |
+| cusp table: every certified cusp of every n | `tie_cusps.parquet` | 12 MB | `--save-cusp-data` (~6 s) | `plot_last_cusp_features.py`, `cusp-proximity` plot |
 | graph data: masses, their ranking and E on a 1001-point p grid, n = 2–1000 | `graph_data_p01001.h5` (HDF5) | 3.0 GB | `--save-graph-data` (~40 s) | explorers 1–4, graph export, Qt GUI |
 
 `--all` runs the three in the order graph, tie points, cusp table. Building the tie tables also

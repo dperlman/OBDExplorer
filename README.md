@@ -36,6 +36,7 @@ subcommand directly (`--help` on each lists its options):
 | `python OBDExplorerPlus.py export -o FILE.png` | a static E/n graph with tie lines (PNG, PDF or SVG) |
 | `python OBDExplorerPlus.py heatmap -o FILE.png --value V` | an N–p heatmap: `d` (log₁₀ of the slope jump at the nearest tie point), `l`/`r` (slopes), `i`/`j` (the pair), `ev_n` (E/n), `eslope_n` (the exact slope E′/n) |
 | `python OBDExplorerPlus.py tie-heatmap -o FILE.png --value V` | an N–tie-index heatmap of the same tie values |
+| `python OBDExplorerPlus.py cusp-proximity -o FILE.png --r R` | for each p, the first n with a cusp within r of p (points, log n); several `--r` values overlay; p that no n ≤ 1000 reaches sit on a pale row at the top |
 | `python OBDExplorerPlus.py gui` | the interactive desktop explorer (needs the GUI extras) |
 
 Analysis plots: `python plot_last_cusp_features.py` (features of the last cusp against n) and
@@ -73,6 +74,7 @@ python OBDExplorerPlus.py html --variant 7 -o docs/OBDExplorer7.html --n-min 2 -
 python OBDExplorerPlus.py heatmap -o docs/plots/N-pHeatmapLog10D.png --value d --colormap hsv --trim-color-range-percent 3 --p-min 0.5 --p-max 0.6 --p-steps 3001
 python OBDExplorerPlus.py heatmap -o docs/plots/N-pHeatmapAnnotated.png --value eslope_n --colormap prism --p-min 0 --p-max 1 --height-in 8
 python OBDExplorerPlus.py tie-heatmap -o docs/plots/N-tieHeatmapExact.png --pixel-mode exact --value d --colormap hsv
+python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR.png
 ```
 
 The `export` graphs are listed with their commands in [docs/plots/README.md](docs/plots/README.md).
@@ -87,7 +89,7 @@ from itself. Link any new page or plot from [`docs/index.html`](docs/index.html)
 |---|---|
 | `OBDExplorerPlus.py` | the entry point (menu and subcommands above) |
 | `OBDsaveSourceData.py` | builds and loads everything in `data/` |
-| `obd_explorer/` | the explorer implementations: HTML builders and exporters (`explorer*_*.py`), headless rendering (`render_headless.py`), data loading (`grid.py`, `tie_data.py`, `html_data.py`) |
+| `obd_explorer/` | the explorer implementations: HTML builders and exporters (`explorer*_*.py`), headless rendering (`render_headless.py`), the cusp-proximity plot (`cusp_proximity.py`), data loading (`grid.py`, `tie_data.py`, `html_data.py`) |
 | `obd_explorer_qt_ui.py` | the desktop GUI |
 | `plot_*.py` | analysis plots (PDFs into `data/`) |
 | `docs/` | the GitHub Pages site: explorer pages, `plots/`, `index.html` |

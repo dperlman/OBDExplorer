@@ -1,6 +1,6 @@
 """Settings stored inside exported PNG files, so every image records how it was made.
 
-Every PNG written by ``OBDExplorerPlus.py`` (export, heatmap, tie-heatmap) gets PNG text chunks
+Every PNG written by ``OBDExplorerPlus.py`` (export, heatmap, tie-heatmap, cusp-proximity) gets PNG text chunks
 (iTXt, the standard place for text in a PNG; the pixels are not touched):
 
     obd:command      the command line, when run as a subcommand (absent for the interactive menu)
