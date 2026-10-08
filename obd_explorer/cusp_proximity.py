@@ -3,8 +3,7 @@
     N_r(p) = min { n : some cusp p* of n has |p* - p| <= r }
 
 Read straight from the cusp table (``data/tie_cusps.parquet``, every certified cusp of every n), so
-nothing is recomputed.  Each grid p is exact for the data: it is the first n, in increasing order,
-whose sorted cusps (one ``searchsorted``) put one within r of p.  A p with no such n up to the
+nothing is recomputed.  Each grid p is exact for the data: the smallest n of the cusps within r of it.  A p with no such n up to the
 largest n available is "not reached".  Every cusp found so far has p* < 0.657 (ordered-binomial-cusps
 FACTS S5, n <= 5000), so p_max defaults to 0.657.
 
@@ -31,7 +30,8 @@ class CuspProximityExportConfig:
     r_values: tuple[float, ...] = (0.001,)
     p_min: float = 0.5
     p_max: float = 0.657
-    p_steps: int | None = None          # None: spacing r/10 for the smallest r
+    p_steps: int | None = None          # None: points_per_r points per r, for the smallest r
+    points_per_r: float = 10.0
     n_max: int | None = None            # None: every n in the cusp table
     log_n: bool = True
     marker_size: float = 2.0
@@ -44,25 +44,22 @@ class CuspProximityExportConfig:
 
 
 def first_n_within_r(cusp_n: np.ndarray, cusp_p: np.ndarray, grid: np.ndarray, r: float) -> np.ndarray:
-    """For each grid p, the smallest n with a cusp within r of p (0 where no n in the table has one).
+    """For each grid p (sorted), the smallest n with a cusp within r of p (0 where no cusp has one).
 
-    ``cusp_n``/``cusp_p`` are the cusp table's columns, sorted by n then p.
+    Each cusp marks the grid points in [p* - r, p* + r] and every point keeps the smallest n that
+    marks it; a cusp covers at most 2 r / (grid spacing) + 1 points, so this is one pass per offset.
     """
-    first = np.zeros(grid.size, dtype=np.int64)
-    starts = np.r_[0, np.flatnonzero(np.diff(cusp_n)) + 1]
-    ends = np.r_[starts[1:], cusp_n.size]
-    for lo, hi in zip(starts, ends):
-        todo = np.flatnonzero(first == 0)
-        if todo.size == 0:
-            break
-        c = cusp_p[lo:hi]
-        g = grid[todo]
-        k = np.searchsorted(c, g)
-        below = c[np.clip(k - 1, 0, c.size - 1)]
-        above = c[np.clip(k, 0, c.size - 1)]
-        dist = np.minimum(np.abs(g - below), np.abs(above - g))
-        first[todo[dist <= r]] = int(cusp_n[lo])
-    return first
+    lo = np.searchsorted(grid, cusp_p - r, side="left")
+    hi = np.searchsorted(grid, cusp_p + r, side="right")
+    keep = hi > lo
+    lo, hi, nn = lo[keep], hi[keep], cusp_n[keep].astype(np.int64)
+    none = np.iinfo(np.int64).max
+    best = np.full(grid.size, none, dtype=np.int64)
+    for k in range(int((hi - lo).max()) if lo.size else 0):
+        m = lo + k < hi
+        np.minimum.at(best, lo[m] + k, nn[m])
+    best[best == none] = 0
+    return best
 
 
 def load_cusps(cfg: CuspProximityExportConfig) -> tuple[np.ndarray, np.ndarray, int]:
@@ -96,7 +93,7 @@ def load_cusps(cfg: CuspProximityExportConfig) -> tuple[np.ndarray, np.ndarray, 
 def _grid(cfg: CuspProximityExportConfig) -> np.ndarray:
     steps = cfg.p_steps
     if steps is None:
-        steps = int(math.ceil((cfg.p_max - cfg.p_min) / (min(cfg.r_values) / 10.0))) + 1
+        steps = int(math.ceil((cfg.p_max - cfg.p_min) / (min(cfg.r_values) / cfg.points_per_r) - 1e-9)) + 1
     return np.linspace(cfg.p_min, cfg.p_max, steps)
 
 

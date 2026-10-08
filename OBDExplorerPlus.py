@@ -1322,6 +1322,7 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         p_min=args.p_min,
         p_max=args.p_max,
         p_steps=args.p_steps,
+        points_per_r=args.points_per_r,
         n_max=args.n_max,
         log_n=args.log_n,
         marker_size=args.marker_size,
@@ -1749,8 +1750,9 @@ def main() -> None:
         "--p-steps",
         type=int,
         default=None,
-        help="Number of p values (default: spacing r/10 for the smallest r).",
+        help="Number of p values (default: --points-per-r per r, for the smallest r).",
     )
+    p_cp.add_argument("--points-per-r", type=float, default=10.0, help="p spacing r/this, when --p-steps is not given (default 10).")
     p_cp.add_argument("--n-max", type=int, default=None, help="Use only cusps of n <= this (default: the whole table).")
     p_cp.add_argument("--log-n", action="store_true", default=True, help="Log scale for n (default).")
     p_cp.add_argument("--linear-n", action="store_false", dest="log_n", help="Linear scale for n.")
