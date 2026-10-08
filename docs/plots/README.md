@@ -17,7 +17,13 @@ python -m obd_explorer.png_metadata docs/plots/N-pColorTieGraphFull.png
 | `N-pHeatmapLog10D.png` | `python OBDExplorerPlus.py heatmap -o docs/plots/N-pHeatmapLog10D.png --value d --colormap hsv --trim-color-range-percent 3 --p-min 0.5 --p-max 0.6 --p-steps 3001` |
 | `N-pHeatmapAnnotated.png` | `python OBDExplorerPlus.py heatmap -o docs/plots/N-pHeatmapAnnotated.png --value eslope_n --colormap prism --p-min 0 --p-max 1 --height-in 8` |
 | `N-tieHeatmapExact.png` | `python OBDExplorerPlus.py tie-heatmap -o docs/plots/N-tieHeatmapExact.png --pixel-mode exact --value d --colormap hsv` |
-| `N-pFirstCuspWithinR.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR.png` |
+| `N-pFirstCuspWithinR1e-3.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-3.png --r 0.001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
+| `N-pFirstCuspWithinR1e-4.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-4.png --r 0.0001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
+
+The two `N-pFirstCuspWithinR` plots also read the certified cusp catalogue of
+[ordered-binomial-cusps](https://github.com/dperlman/ordered-binomial-cusps) (`cusps/cusps_all.csv`,
+n ≤ 5000, built there by `cusps_fast.py`) for the n past this repo's tie tables; for n ≤ 1000 it
+holds exactly the same cusps as `data/tie_cusps.parquet`.
 
 `N-pColorTieGraphHalf_old.png` and `N-pColorTieGraphDetrendFull_old.png` are the originals from
 May 2026, kept as they were. Their settings were not recorded, and the current code doesn't

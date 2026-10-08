@@ -1329,6 +1329,7 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         height_in=args.height_in,
         dpi=args.dpi,
         cusp_table=args.cusp_table,
+        cusps_csv=args.cusps_csv,
         output_path=_resolved_export_output_path(args.output, "png"),
     )
     _ensure_output_parent_dir(cfg.output_path)
@@ -1743,7 +1744,7 @@ def main() -> None:
         help="Distance r (default 0.001). Several values overlay, e.g. --r 0.01 0.001 0.0001.",
     )
     p_cp.add_argument("--p-min", type=float, default=0.5)
-    p_cp.add_argument("--p-max", type=float, default=1.0)
+    p_cp.add_argument("--p-max", type=float, default=0.657, help="Default 0.657: no cusp found above it (cusps repo FACTS S5).")
     p_cp.add_argument(
         "--p-steps",
         type=int,
@@ -1755,6 +1756,11 @@ def main() -> None:
     p_cp.add_argument("--linear-n", action="store_false", dest="log_n", help="Linear scale for n.")
     p_cp.add_argument("--marker-size", type=float, default=2.0, help="Point area in points^2.")
     p_cp.add_argument("--cusp-table", default=None, help="Cusp table (Parquet) path.")
+    p_cp.add_argument(
+        "--cusps-csv",
+        default=None,
+        help="ordered-binomial-cusps' cusps/cusps_all.csv (n <= 5000): adds its cusps for n past the cusp table.",
+    )
     p_cp.add_argument("--width-in", type=float, default=12.0)
     p_cp.add_argument("--height-in", type=float, default=7.0)
     p_cp.add_argument("--dpi", type=int, default=300)
