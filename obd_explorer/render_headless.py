@@ -875,6 +875,10 @@ def export_graph_headless(cfg: HeadlessExportConfig, *, verbose: bool = True) ->
     else:
         app = QtWidgets.QApplication.instance()
         if app is None:
+            # Offscreen, so the widget really is render_w x render_h.  On a screen the window manager
+            # clamps it to the display, and ImageExporter keeps the clamped aspect ratio: the same
+            # command gave 6566 x 4000 instead of 6000 x 4000 on a 1512 x 949 laptop screen.
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
             app = QtWidgets.QApplication(sys.argv)
         app.setFont(QtGui.QFont("Helvetica"))
 

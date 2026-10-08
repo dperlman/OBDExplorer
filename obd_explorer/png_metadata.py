@@ -88,13 +88,19 @@ def read_png_text(path: str) -> dict[str, str]:
 
 
 def _git_commit(exclude: str | None = None) -> str:
-    """HEAD, with "+dirty" if tracked files differ from it; ``exclude`` (the file just written) is not counted."""
+    """HEAD, with "+dirty" if tracked files differ from it.
+
+    Generated images (PNG, PDF, SVG) and ``exclude`` (the file just written) are not counted: they
+    are outputs, nothing reads them, and regenerating several plots in a row would otherwise mark
+    every one after the first as dirty.
+    """
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         sha = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        cmd = ["git", "-C", here, "diff", "--quiet", "HEAD"]
+        cmd = ["git", "-C", here, "diff", "--quiet", "HEAD", "--", ".",
+               ":(exclude,glob)**/*.png", ":(exclude,glob)**/*.pdf", ":(exclude,glob)**/*.svg"]
         if exclude is not None:
-            cmd += ["--", ".", ":(exclude)" + os.path.relpath(os.path.abspath(exclude), here)]
+            cmd.append(":(exclude)" + os.path.relpath(os.path.abspath(exclude), here))
         dirty = subprocess.run(cmd).returncode != 0
         return sha + ("+dirty" if dirty else "")
     except (OSError, subprocess.CalledProcessError):
