@@ -103,8 +103,18 @@ def _window_cusps(task):
     import obd_core
 
     n, windows, min_pair_mass, points = task
+    if points == "ties":
+        # Only p* is needed, not verdicts: screen gives every tie point in the windows from the same
+        # kernel without certifying any (tie_table would, and near 1/2 at large n the interval
+        # arithmetic costs minutes per n).
+        lnC = obd_core.lnC_arr(n)
+        parts = [obd_core.screen(n, collect_all=True, lnC=lnC, p_range=w, min_pair_mass=min_pair_mass)
+                 for w in windows]
+        i = np.concatenate([s["i"] for s in parts]); j = np.concatenate([s["j"] for s in parts])
+        p = np.concatenate([s["pstar"] for s in parts])
+        return n, windows, i, j, p, np.full(p.size, "not decided")
     t = obd_core.tie_table(n, p_range=windows, min_pair_mass=min_pair_mass)
-    c = t["is_cusp"] if points == "cusps" else np.ones(len(t["i"]), bool)
+    c = t["is_cusp"]
     return n, windows, t["i"][c], t["j"][c], t["pstar"][c], t["decided_by"][c].astype(str)
 
 
@@ -143,7 +153,8 @@ class WindowCache:
         coverage/part-*.parquet   n (int32), lo, hi (float64), min_pair_mass (float64; 0 = complete
                                   search): every tie point of n with lo <= p* <= hi was examined
         cusps/part-*.parquet      n (int32), i, j (int32), pstar (float64), decided_by (string): the
-        (ties/ for points="ties") certified cusps found there (every tie point, for "ties")
+        (ties/ for points="ties") certified cusps found there (every tie point, for "ties", with
+                                  decided_by "not decided": the tie search does not certify)
     Schema metadata: format (CACHE_FORMAT), obd_core_version, created_at.  Parts are written whole
     to a temporary name and renamed, so an interrupted run leaves only complete parts.
 
