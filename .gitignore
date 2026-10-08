@@ -28,3 +28,5 @@ build/
 # OS / editor
 .DS_Store
 Thumbs.db
+# Logs of long plot runs (e.g. cusp-proximity --extend-to).
+/log/*.log

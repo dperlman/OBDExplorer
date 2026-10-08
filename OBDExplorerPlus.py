@@ -1314,6 +1314,36 @@ def _run_tie_heatmap_export(args: argparse.Namespace) -> None:
     stamp_export(cfg.output_path, cfg, args)
 
 
+def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
+    from obd_explorer.cusp_proximity import CuspProximityExportConfig, export_cusp_proximity
+
+    cfg = CuspProximityExportConfig(
+        r_values=tuple(args.r),
+        p_min=args.p_min,
+        p_max=args.p_max,
+        p_steps=args.p_steps,
+        points_per_r=args.points_per_r,
+        r_power=args.r_power,
+        n_max=args.n_max,
+        log_n=args.log_n,
+        marker_size=args.marker_size,
+        width_in=args.width_in,
+        height_in=args.height_in,
+        dpi=args.dpi,
+        cusp_table=args.cusp_table,
+        cusps_csv=args.cusps_csv,
+        extend_to=args.extend_to,
+        extend_p_max=args.extend_p_max,
+        min_pair_mass=args.min_pair_mass,
+        workers=args.workers,
+        window_cache=None if args.no_window_cache else args.window_cache,
+        output_path=_resolved_export_output_path(args.output, "png"),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_cusp_proximity(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
+
+
 def _run_html(args: argparse.Namespace) -> None:
     raw_out = getattr(args, "output", None)
     if raw_out is None or not str(raw_out).strip():
@@ -1708,6 +1738,75 @@ def main() -> None:
     p_thm.add_argument("--height-in", type=float, default=10.0)
     p_thm.add_argument("--dpi", type=int, default=400)
 
+    p_cp = sub.add_parser(
+        "cusp-proximity",
+        help="For each p, the first n with a cusp within r of p (points; from the cusp table, PNG).",
+    )
+    p_cp.add_argument("-o", "--output", required=True)
+    p_cp.add_argument(
+        "--r",
+        type=float,
+        nargs="+",
+        default=[0.001],
+        help="Distance r (default 0.001). Several values overlay, e.g. --r 0.01 0.001 0.0001.",
+    )
+    p_cp.add_argument("--p-min", type=float, default=0.5)
+    p_cp.add_argument("--p-max", type=float, default=0.657, help="Default 0.657: no cusp found above it (cusps repo FACTS S5).")
+    p_cp.add_argument(
+        "--p-steps",
+        type=int,
+        default=None,
+        help="Number of p values for every r (default: spacing r / --points-per-r, separately for each r).",
+    )
+    p_cp.add_argument("--points-per-r", type=float, default=10.0, help="p spacing r/this, when --p-steps is not given (default 10).")
+    p_cp.add_argument("--n-max", type=int, default=None, help="Use only cusps of n <= this (default: the whole table).")
+    p_cp.add_argument(
+        "--r-power",
+        type=float,
+        default=0.0,
+        help="Plot (first n) * r**K: K = 0.5 collapses the bulk of the band (median about 0.53 at every r), "
+        "K = 1 the edge near 1/2 and the spikes at simple fractions.",
+    )
+    p_cp.add_argument("--scale-sqrt-r", action="store_const", const=0.5, dest="r_power", help="Same as --r-power 0.5.")
+    p_cp.add_argument("--log-n", action="store_true", default=True, help="Log scale for n (default).")
+    p_cp.add_argument("--linear-n", action="store_false", dest="log_n", help="Linear scale for n.")
+    p_cp.add_argument("--marker-size", type=float, default=2.0, help="Point area in points^2.")
+    p_cp.add_argument("--cusp-table", default=None, help="Cusp table (Parquet) path.")
+    p_cp.add_argument(
+        "--cusps-csv",
+        default=None,
+        help="ordered-binomial-cusps' cusps/cusps_all.csv (n <= 5000): adds its cusps for n past the cusp table.",
+    )
+    p_cp.add_argument(
+        "--extend-to",
+        type=int,
+        default=None,
+        help="Search on past the tables up to this n, computing only tie points within r of the p not yet "
+        "reached (OBD-core windowed tie tables).",
+    )
+    p_cp.add_argument(
+        "--extend-p-max",
+        type=float,
+        default=0.6525,
+        help="Only search p up to this (default 0.6525: no cusp past it for n > 1250 so far, FACTS S5).",
+    )
+    p_cp.add_argument(
+        "--min-pair-mass",
+        type=float,
+        default=None,
+        help="With --extend-to: skip pairs whose mass f(i) is below this (e.g. 1e-20). Faster; not proved complete.",
+    )
+    p_cp.add_argument("--workers", type=int, default=8, help="Processes for --extend-to.")
+    p_cp.add_argument(
+        "--window-cache",
+        default=os.path.join("data", "cusp_windows"),
+        help="Where --extend-to keeps what it has searched and found, so later runs reuse it (default data/cusp_windows).",
+    )
+    p_cp.add_argument("--no-window-cache", action="store_true", help="Neither read nor write the window cache.")
+    p_cp.add_argument("--width-in", type=float, default=12.0)
+    p_cp.add_argument("--height-in", type=float, default=7.0)
+    p_cp.add_argument("--dpi", type=int, default=300)
+
     args = parser.parse_args()
     if args.cmd is None:
         _interactive()
@@ -1722,6 +1821,8 @@ def main() -> None:
         _run_heatmap_export(args)
     elif args.cmd == "tie-heatmap":
         _run_tie_heatmap_export(args)
+    elif args.cmd == "cusp-proximity":
+        _run_cusp_proximity_export(args)
 
 
 if __name__ == "__main__":

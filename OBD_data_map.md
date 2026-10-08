@@ -12,6 +12,7 @@ This document is a reference for the data files, data structures and dtypes writ
   - [Tie CSV log columns](#tie-csv-log-columns)
 - [Pathway 2: graph data](#pathway-2-graph-data)
 - [Pathway 3: cusp table](#pathway-3-cusp-table)
+- [Pathway 4: window cache](#pathway-4-window-cache)
 - [Loaders](#loaders)
 - [Practical interpretation notes](#practical-interpretation-notes)
 
@@ -136,6 +137,26 @@ Code path: `save_cusp_table(...)` (`--save-cusp-data`); load with `load_cusp_tab
 `data/tie_cusps.parquet` holds every certified cusp of every n, copied from the tie tables (nothing is recomputed), so cusp plots do not need to read every tie point. Schema metadata: `format` `"obd.tie_cusps.parquet.v5"`, `source_tie_manifest`, `created_at`, `obd_core_version`.
 
 Columns: `n` (int16), `tie_index` (int32; signed, relative to the center tie `p = 1/2`, which is always a cusp, so `tie_index = 0` there), and the tie columns `p`, `i`, `j`, `E`, `slope_left`, `slope_right`, `log10_D`, `decided_by`. Rows are sorted by `n`, then `p`.
+
+## Pathway 4: window cache
+
+Code path: `obd_explorer/cusp_proximity.py`, `WindowCache`, written by `extend_first_n` when
+`OBDExplorerPlus.py cusp-proximity --extend-to N` searches past the cusp tables with OBD-core's
+windowed tie tables (`tie_table(n, p_range=[windows])`, obd-core >= 0.6.0).
+
+`data/cusp_windows/` holds Parquet parts, one pair per block of n searched (zstd; schema metadata
+`format` = `"obd.cusp_windows.parquet.v1"`, `obd_core_version`, `created_at`):
+
+| file | columns | meaning |
+|---|---|---|
+| `coverage/part-*.parquet` | `n` int32, `lo`, `hi` float64, `min_pair_mass` float64 | every tie point of n with lo ≤ p\* ≤ hi was examined; `min_pair_mass` 0 for a complete search, else the threshold used |
+| `cusps/part-*.parquet` | `n` int32, `i`, `j` int32, `pstar` float64, `decided_by` string | the certified cusps (p\* > ½) found in those intervals |
+
+A run computes only the parts of its windows that no usable coverage holds, so rerunning a plot
+takes seconds and an interrupted run resumes. Coverage from a search with `min_pair_mass` m is used
+only by runs with `min_pair_mass` ≥ m, so a filtered search never stands in for a complete one.
+Cusps are written before their coverage, each part whole under a temporary name and then renamed.
+Delete the directory to start over.
 
 ## Loaders
 

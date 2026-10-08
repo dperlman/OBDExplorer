@@ -1,6 +1,6 @@
 """Settings stored inside exported PNG files, so every image records how it was made.
 
-Every PNG written by ``OBDExplorerPlus.py`` (export, heatmap, tie-heatmap) gets PNG text chunks
+Every PNG written by ``OBDExplorerPlus.py`` (export, heatmap, tie-heatmap, cusp-proximity) gets PNG text chunks
 (iTXt, the standard place for text in a PNG; the pixels are not touched):
 
     obd:command      the command line, when run as a subcommand (absent for the interactive menu)
@@ -87,11 +87,22 @@ def read_png_text(path: str) -> dict[str, str]:
     return out
 
 
-def _git_commit() -> str:
+def _git_commit(exclude: str | None = None) -> str:
+    """HEAD, with "+dirty" if tracked files differ from it.
+
+    Generated images (PNG, PDF, SVG) and ``exclude`` (the file just written) are not counted: they
+    are outputs, nothing reads them, and regenerating several plots in a row would otherwise mark
+    every one after the first as dirty.
+    """
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         sha = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "-C", here, "diff", "--quiet", "HEAD"]).returncode != 0
+        cmd = ["git", "-C", here, "diff", "--quiet", "HEAD", "--", ".",
+               ":(exclude,glob)**/*.png", ":(exclude,glob)**/*.pdf", ":(exclude,glob)**/*.svg"]
+        rel = os.path.relpath(os.path.abspath(exclude), here) if exclude is not None else None
+        if rel is not None and not rel.startswith(".."):              # only a path inside the repo
+            cmd.append(":(exclude)" + rel)
+        dirty = subprocess.run(cmd).returncode != 0
         return sha + ("+dirty" if dirty else "")
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
@@ -116,7 +127,7 @@ def stamp_export(path: str, cfg, args=None) -> None:
     settings = dataclasses.asdict(cfg) if dataclasses.is_dataclass(cfg) else dict(cfg)
     items["obd:settings"] = json.dumps(settings, default=str, sort_keys=True)
     items["obd:obd_core"] = core
-    items["obd:git_commit"] = _git_commit()
+    items["obd:git_commit"] = _git_commit(exclude=path)
     items["obd:created"] = datetime.now().isoformat(timespec="seconds")
     write_png_text(path, items)
 
