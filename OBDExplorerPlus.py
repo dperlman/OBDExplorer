@@ -1323,7 +1323,7 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         p_max=args.p_max,
         p_steps=args.p_steps,
         points_per_r=args.points_per_r,
-        scale_sqrt_r=args.scale_sqrt_r,
+        r_power=args.r_power,
         n_max=args.n_max,
         log_n=args.log_n,
         marker_size=args.marker_size,
@@ -1756,11 +1756,13 @@ def main() -> None:
     p_cp.add_argument("--points-per-r", type=float, default=10.0, help="p spacing r/this, when --p-steps is not given (default 10).")
     p_cp.add_argument("--n-max", type=int, default=None, help="Use only cusps of n <= this (default: the whole table).")
     p_cp.add_argument(
-        "--scale-sqrt-r",
-        action="store_true",
-        default=False,
-        help="Plot (first n) * sqrt(r): typical values are about 0.53 at every r, so several r collapse together.",
+        "--r-power",
+        type=float,
+        default=0.0,
+        help="Plot (first n) * r**K: K = 0.5 collapses the bulk of the band (median about 0.53 at every r), "
+        "K = 1 the edge near 1/2 and the spikes at simple fractions.",
     )
+    p_cp.add_argument("--scale-sqrt-r", action="store_const", const=0.5, dest="r_power", help="Same as --r-power 0.5.")
     p_cp.add_argument("--log-n", action="store_true", default=True, help="Log scale for n (default).")
     p_cp.add_argument("--linear-n", action="store_false", dest="log_n", help="Linear scale for n.")
     p_cp.add_argument("--marker-size", type=float, default=2.0, help="Point area in points^2.")

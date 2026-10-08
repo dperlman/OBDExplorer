@@ -7,10 +7,11 @@ nothing is recomputed.  Each grid p is exact for the data: the smallest n of the
 largest n available is "not reached".  Every cusp found so far has p* < 0.657 (ordered-binomial-cusps
 FACTS S5, n <= 5000), so p_max defaults to 0.657.
 
-``scale_sqrt_r`` plots N_r(p) * sqrt(r) instead.  Across the band its median is about 0.53 at every r
+``r_power`` = k plots N_r(p) * r^k instead.  With k = 1/2: across the band the median is about 0.53 at every r
 from 1e-3 to 1e-6, what cusps scattered at random with density ~2.3 per unit p per n would give
 (median sqrt(ln 2 / (2.3 r))), so several r collapse onto one picture and what departs from that
-(the spikes at simple fractions, the edge near 1/2) stands out.
+(the spikes at simple fractions, the edge near 1/2) stands out.  Those two grow like 1/r instead
+(near 1/2 the first cusp is at about 1/2 + 1/(2(n+1))), which k = 1 lines up.
 
 ``cusps_csv`` extends the data past the cusp table with ordered-binomial-cusps' certified catalogue
 ``cusps/cusps_all.csv`` (n = 3..5000; columns ``n`` and ``pstar``, the cusps with p* > 1/2): its rows
@@ -37,7 +38,7 @@ class CuspProximityExportConfig:
     p_max: float = 0.657
     p_steps: int | None = None          # None: spacing r / points_per_r, separately for each r
     points_per_r: float = 10.0
-    scale_sqrt_r: bool = False          # plot N_r(p) * sqrt(r)
+    r_power: float = 0.0                # plot N_r(p) * r**r_power
     n_max: int | None = None            # None: every n in the cusp table
     log_n: bool = True
     marker_size: float = 2.0
@@ -131,7 +132,8 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
     # With r / points_per_r spacing, a larger r has fewer points; larger marks keep it visible.
     sizes = {r: cfg.marker_size * math.sqrt(r / r_min) for r in r_sorted} if cfg.p_steps is None \
         else {r: cfg.marker_size for r in r_sorted}
-    scale = {r: math.sqrt(r) if cfg.scale_sqrt_r else 1.0 for r in r_sorted}
+    scaled = cfg.r_power != 0
+    scale = {r: r ** cfg.r_power for r in r_sorted}
     ceiling = {r: n_top * scale[r] for r in r_sorted}           # n_top in plotted units
 
     fig, ax = plt.subplots(figsize=(cfg.width_in, cfg.height_in), facecolor=FIGURE_BACKGROUND)
@@ -154,7 +156,7 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
             pale = tuple(0.65 + 0.35 * v for v in to_rgb(color))   # opaque, so stacked points stay pale
             ax.scatter(grid[~hit], np.full((~hit).sum(), unreached_y), s=sizes[r], lw=0, color=pale,
                        rasterized=True)
-        if cfg.scale_sqrt_r or len(r_sorted) == 1:
+        if scaled or len(r_sorted) == 1:
             ax.axhline(ceiling[r], color=color if len(r_sorted) > 1 else "0.6", lw=0.6, ls=":")
         if verbose:
             reached = grid[hit]
@@ -164,9 +166,9 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
 
     if cfg.log_n:
         ax.set_yscale("log")
-    if not cfg.scale_sqrt_r and len(r_sorted) > 1:
+    if not scaled and len(r_sorted) > 1:
         ax.axhline(n_top, color="0.6", lw=0.6, ls=":")
-    if cfg.scale_sqrt_r and medians:
+    if cfg.r_power == 0.5 and medians:
         med = float(np.median(medians))
         ax.axhline(med, color="0.35", lw=0.7, ls="--")
         ax.text(cfg.p_max - 0.01 * (cfg.p_max - cfg.p_min), med, f"median ≈ {med:.2f}", ha="right", va="center",
@@ -175,23 +177,24 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
         ax.text(cfg.p_min, unreached_y, f"  pale points: none up to n = {n_top}", ha="left", va="center",
                 fontsize=9, color="0.35")
     ax.set_xlim(cfg.p_min - 0.005 * (cfg.p_max - cfg.p_min), cfg.p_max + 0.005 * (cfg.p_max - cfg.p_min))
-    y_floor = (1.5 if not cfg.scale_sqrt_r else 1.5 * math.sqrt(r_min))
+    y_floor = 1.5 * r_min ** cfg.r_power
     if cfg.log_n:
         ax.set_ylim(y_floor, unreached_y * 1.8 if any_unreached else top * 1.3)
     else:
         ax.set_ylim(0, unreached_y * 1.05 if any_unreached else top * 1.02)
     ax.set_xlabel("p")
-    ax.set_ylabel("(first n with a cusp within r of p) × √r" if cfg.scale_sqrt_r
+    factor = {0.5: "√r", 1.0: "r"}.get(cfg.r_power, f"r^{cfg.r_power:g}")
+    ax.set_ylabel(f"(first n with a cusp within r of p) × {factor}" if scaled
                   else "first n with a cusp within r of p")
     r_text = ", ".join(f"${_format_r(r)}$" for r in sorted(cfg.r_values, reverse=True))
     pts = (f"{n_points[r_sorted[0]]} values of p" if len(r_sorted) == 1
            else f"p spacing r/{cfg.points_per_r:g}" if cfg.p_steps is None else f"{cfg.p_steps} values of p")
-    head = ("First n with a cusp within r of p, times √r" if cfg.scale_sqrt_r
+    head = (f"First n with a cusp within r of p, times {factor}" if scaled
             else "How far up n must go before a cusp comes within r of p")
     ax.set_title(f"{head}  (r = {r_text}; {pts}; cusps of n = 2–{n_top})"
                  + (f"\ncusps for n ≤ {n_table}: OBD tie tables; n = {n_table + 1}–{n_top}: ordered-binomial-cusps "
                     "catalogue (identical for n ≤ 1000)" if n_top > n_table else "")
-                 + ("\ndotted lines: n = " + str(n_top) + " for each r" if cfg.scale_sqrt_r and len(r_sorted) > 1 else ""),
+                 + ("\ndotted lines: n = " + str(n_top) + " for each r" if scaled and len(r_sorted) > 1 else ""),
                  fontsize=11)
     if len(r_sorted) > 1:
         from matplotlib.lines import Line2D
