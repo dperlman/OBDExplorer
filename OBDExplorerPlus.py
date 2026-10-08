@@ -1336,6 +1336,7 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         extend_p_max=args.extend_p_max,
         min_pair_mass=args.min_pair_mass,
         workers=args.workers,
+        window_cache=None if args.no_window_cache else args.window_cache,
         output_path=_resolved_export_output_path(args.output, "png"),
     )
     _ensure_output_parent_dir(cfg.output_path)
@@ -1796,6 +1797,12 @@ def main() -> None:
         help="With --extend-to: skip pairs whose mass f(i) is below this (e.g. 1e-20). Faster; not proved complete.",
     )
     p_cp.add_argument("--workers", type=int, default=8, help="Processes for --extend-to.")
+    p_cp.add_argument(
+        "--window-cache",
+        default=os.path.join("data", "cusp_windows"),
+        help="Where --extend-to keeps what it has searched and found, so later runs reuse it (default data/cusp_windows).",
+    )
+    p_cp.add_argument("--no-window-cache", action="store_true", help="Neither read nor write the window cache.")
     p_cp.add_argument("--width-in", type=float, default=12.0)
     p_cp.add_argument("--height-in", type=float, default=7.0)
     p_cp.add_argument("--dpi", type=int, default=300)

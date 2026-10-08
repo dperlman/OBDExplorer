@@ -78,6 +78,7 @@ python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-3.p
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-4.png --r 0.0001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-5.png --r 0.00001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-6.png --r 0.000001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --points-per-r 20 --marker-size 0.1 --dpi 600
+python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-6-n20000.png --r 0.000001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --points-per-r 20 --marker-size 0.1 --dpi 600 --extend-to 20000   # hours; resumable (data/cusp_windows)
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR-scaled.png --r 0.001 0.0001 0.00001 0.000001 --scale-sqrt-r --points-per-r 20 --marker-size 0.1 --dpi 600 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR-timesR.png --r 0.001 0.0001 0.00001 0.000001 --r-power 1 --points-per-r 20 --marker-size 0.1 --dpi 600 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 ```
