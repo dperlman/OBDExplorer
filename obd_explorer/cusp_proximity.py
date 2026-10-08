@@ -381,7 +381,7 @@ def _format_r(r: float) -> str:
 
 # Density image layout, in output pixels: room for the title, the axis labels and the unreached band.
 _MARGIN_PX = {"left": 0.075, "right": 0.015, "bottom": 0.085, "top": 0.115}
-_BAND_PX = 24                         # rows for "not reached" at the top of the image
+_BAND_PX = 100                        # rows for "not reached" at the top of the image (fits its label)
 
 
 def _density_layout(cfg: CuspProximityExportConfig) -> tuple[int, int, int, int, int, int]:
@@ -435,7 +435,7 @@ def _density_export(cfg, ax_px, grid, s, first, r, n_top, title, ylabel, verbose
     rgb = np.ones((h, w, 3))
     rgb[_BAND_PX:, :, :] = ink(shade[::-1])[..., :3]
     band = red(np.where(miss > 0, cfg.floor + (1 - cfg.floor) * miss ** cfg.gamma, 0.0))[..., :3]
-    rgb[2:_BAND_PX - 4, :, :] = band[None, :, :]           # the band, with a white gap below it
+    rgb[4:_BAND_PX - 12, :, :] = band[None, :, :]          # the band, with a white gap below it
     fig = plt.figure(figsize=(fw / cfg.dpi, fh / cfg.dpi), dpi=cfg.dpi, facecolor=FIGURE_BACKGROUND)
     ax = fig.add_axes([left / fw, bottom / fh, w / fw, h / fh])
     y_top = y_hi + (y_hi - y_lo) * _BAND_PX / rows
@@ -453,8 +453,8 @@ def _density_export(cfg, ax_px, grid, s, first, r, n_top, title, ylabel, verbose
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"$10^{{{int(round(v))}}}$"))
     ax.axhline(y_cap, color="0.55", lw=0.5, ls=":")
     if miss.any():
-        ax.text(cfg.p_min, y_hi + (y_top - y_hi) * 0.55, f"  red band: share of the column with none up to n = {n_top}",
-                ha="left", va="center", fontsize=8, color="0.3")
+        ax.text(cfg.p_min, y_hi + (y_top - y_hi) * 0.55, f"  red band: share of each pixel column with none up to n = {n_top}",
+                ha="left", va="center", fontsize=7, color="0.15")
     ax.set_xlabel("p")
     ax.set_ylabel(ylabel)
     ax.set_title(title, fontsize=11)
