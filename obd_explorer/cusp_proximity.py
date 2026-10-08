@@ -264,7 +264,7 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
     head = (f"First n with a cusp within r of p, times {factor}" if scaled
             else "How far up n must go before a cusp comes within r of p")
     ax.set_title(f"{head}  (r = {r_text}; {pts}; cusps of n = 2–{n_top})"
-                 + (f"\ncusps for n ≤ {n_table}: OBD tie tables; n = {n_table + 1}–{n_top}: ordered-binomial-cusps "
+                 + (f"\ncusps for n ≤ {n_table}: OBD tie tables; n = {n_table + 1}–{n_data}: ordered-binomial-cusps "
                     "catalogue (identical for n ≤ 1000)" if n_data > n_table else "")
                  + (f"\nn = {n_data + 1}–{n_top}: windowed search near the p not yet reached, p ≤ {cfg.extend_p_max:g}"
                     + (f", pairs with f(i) ≥ {cfg.min_pair_mass:g} only" if cfg.min_pair_mass else "")
