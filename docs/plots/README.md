@@ -19,8 +19,9 @@ python -m obd_explorer.png_metadata docs/plots/N-pColorTieGraphFull.png
 | `N-tieHeatmapExact.png` | `python OBDExplorerPlus.py tie-heatmap -o docs/plots/N-tieHeatmapExact.png --pixel-mode exact --value d --colormap hsv` |
 | `N-pFirstCuspWithinR1e-3.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-3.png --r 0.001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
 | `N-pFirstCuspWithinR1e-4.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-4.png --r 0.0001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
+| `N-pFirstCuspWithinR1e-5.png` | `python OBDExplorerPlus.py cusp-proximity -o docs/plots/N-pFirstCuspWithinR1e-5.png --r 0.00001 --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` |
 
-The two `N-pFirstCuspWithinR` plots also read the certified cusp catalogue of
+The `N-pFirstCuspWithinR` plots also read the certified cusp catalogue of
 [ordered-binomial-cusps](https://github.com/dperlman/ordered-binomial-cusps) (`cusps/cusps_all.csv`,
 n ≤ 5000, built there by `cusps_fast.py`) for the n past this repo's tie tables; for n ≤ 1000 it
 holds exactly the same cusps as `data/tie_cusps.parquet`.
