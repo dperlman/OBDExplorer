@@ -1350,6 +1350,32 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
     stamp_export(cfg.output_path, cfg, args)
 
 
+def _run_proximity_map(args: argparse.Namespace) -> None:
+    from obd_explorer.proximity_map import ProximityMapConfig, export_proximity_map
+
+    cfg = ProximityMapConfig(
+        points=args.points,
+        p_min=args.p_min,
+        p_max=args.p_max,
+        r_min=args.r_min,
+        r_max=args.r_max,
+        alpha=args.alpha,
+        samples=args.samples,
+        n_max=args.n_max,
+        label_denominator=args.label_denominator,
+        colormap=args.colormap,
+        width_in=args.width_in,
+        height_in=args.height_in,
+        dpi=args.dpi,
+        cusp_table=args.cusp_table,
+        cusps_csv=args.cusps_csv,
+        output_path=_resolved_export_output_path(args.output, "png"),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_proximity_map(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
+
+
 def _run_html(args: argparse.Namespace) -> None:
     raw_out = getattr(args, "output", None)
     if raw_out is None or not str(raw_out).strip():
@@ -1834,6 +1860,32 @@ def main() -> None:
     p_cp.add_argument("--height-in", type=float, default=7.0)
     p_cp.add_argument("--dpi", type=int, default=300)
 
+    p_pm = sub.add_parser(
+        "proximity-map",
+        help="First n with a cusp (or tie point) within r of p, over the whole (p, r) plane, as one image.",
+    )
+    p_pm.add_argument("-o", "--output", required=True)
+    p_pm.add_argument("--points", choices=("cusps", "ties"), default="cusps")
+    p_pm.add_argument("--p-min", type=float, default=0.5)
+    p_pm.add_argument("--p-max", type=float, default=None, help="Default 0.657 for cusps, 1 for ties.")
+    p_pm.add_argument("--r-min", type=float, default=1e-8)
+    p_pm.add_argument("--r-max", type=float, default=1e-2)
+    p_pm.add_argument(
+        "--alpha",
+        type=float,
+        default=None,
+        help="Colour is log10(first n * r^alpha); default 1/2 for cusps, 1/3 for ties (the measured trends).",
+    )
+    p_pm.add_argument("--samples", type=int, default=4, help="Values of p per pixel column (default 4).")
+    p_pm.add_argument("--n-max", type=int, default=None, help="Use only n <= this (default: all complete data).")
+    p_pm.add_argument("--label-denominator", type=int, default=None, help="Mark fractions with b <= this (default 12 cusps, 8 ties).")
+    p_pm.add_argument("--colormap", default="magma")
+    p_pm.add_argument("--cusp-table", default=None, help="Cusp table (Parquet) path.")
+    p_pm.add_argument("--cusps-csv", default=None, help="ordered-binomial-cusps' cusps/cusps_all.csv (n <= 5000).")
+    p_pm.add_argument("--width-in", type=float, default=12.0)
+    p_pm.add_argument("--height-in", type=float, default=7.0)
+    p_pm.add_argument("--dpi", type=int, default=600)
+
     args = parser.parse_args()
     if args.cmd is None:
         _interactive()
@@ -1850,6 +1902,8 @@ def main() -> None:
         _run_tie_heatmap_export(args)
     elif args.cmd == "cusp-proximity":
         _run_cusp_proximity_export(args)
+    elif args.cmd == "proximity-map":
+        _run_proximity_map(args)
 
 
 if __name__ == "__main__":
