@@ -1332,6 +1332,10 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         dpi=args.dpi,
         cusp_table=args.cusp_table,
         cusps_csv=args.cusps_csv,
+        extend_to=args.extend_to,
+        extend_p_max=args.extend_p_max,
+        min_pair_mass=args.min_pair_mass,
+        workers=args.workers,
         output_path=_resolved_export_output_path(args.output, "png"),
     )
     _ensure_output_parent_dir(cfg.output_path)
@@ -1772,6 +1776,26 @@ def main() -> None:
         default=None,
         help="ordered-binomial-cusps' cusps/cusps_all.csv (n <= 5000): adds its cusps for n past the cusp table.",
     )
+    p_cp.add_argument(
+        "--extend-to",
+        type=int,
+        default=None,
+        help="Search on past the tables up to this n, computing only tie points within r of the p not yet "
+        "reached (OBD-core windowed tie tables).",
+    )
+    p_cp.add_argument(
+        "--extend-p-max",
+        type=float,
+        default=0.6525,
+        help="Only search p up to this (default 0.6525: no cusp past it for n > 1250 so far, FACTS S5).",
+    )
+    p_cp.add_argument(
+        "--min-pair-mass",
+        type=float,
+        default=None,
+        help="With --extend-to: skip pairs whose mass f(i) is below this (e.g. 1e-20). Faster; not proved complete.",
+    )
+    p_cp.add_argument("--workers", type=int, default=8, help="Processes for --extend-to.")
     p_cp.add_argument("--width-in", type=float, default=12.0)
     p_cp.add_argument("--height-in", type=float, default=7.0)
     p_cp.add_argument("--dpi", type=int, default=300)

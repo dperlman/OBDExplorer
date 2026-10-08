@@ -7,6 +7,14 @@ nothing is recomputed.  Each grid p is exact for the data: the smallest n of the
 largest n available is "not reached".  Every cusp found so far has p* < 0.657 (ordered-binomial-cusps
 FACTS S5, n <= 5000), so p_max defaults to 0.657.
 
+``extend_to`` = N carries the search past the tables, up to n = N, with OBD-core's windowed tie
+table (``tie_table(n, p_range=...)``, obd-core >= 0.6.0): for each further n it computes only the
+tie points within r of the p not yet reached, so the cost follows what is left, not the whole
+band.  Blocks of consecutive n run in parallel; each p keeps the smallest n that reaches it, so
+the result is the same as a sequential search.  It searches p <= extend_p_max only (default
+0.6525: past n ~ 1250 every cusp found so far has p* < 0.6525, FACTS S5, so the edge above would
+cost the most and find nothing).  ``min_pair_mass`` is passed through: faster, not proved complete.
+
 ``r_power`` = k plots N_r(p) * r^k instead.  With k = 1/2: across the band the median is about 0.53 at every r
 from 1e-3 to 1e-6, what cusps scattered at random with density ~2.3 per unit p per n would give
 (median sqrt(ln 2 / (2.3 r))), so several r collapse onto one picture and what departs from that
@@ -47,6 +55,10 @@ class CuspProximityExportConfig:
     dpi: int = 300
     cusp_table: str | None = None
     cusps_csv: str | None = None        # ordered-binomial-cusps' cusps_all.csv, for n past the table
+    extend_to: int | None = None        # search on with windowed tie tables up to this n
+    extend_p_max: float = 0.6525        # ... but only for p up to this
+    min_pair_mass: float | None = None  # passed to tie_table: faster, not proved complete
+    workers: int = 8
     output_path: str = "plots/N-pFirstCuspWithinR.png"
 
 
@@ -67,6 +79,62 @@ def first_n_within_r(cusp_n: np.ndarray, cusp_p: np.ndarray, grid: np.ndarray, r
         np.minimum.at(best, lo[m] + k, nn[m])
     best[best == none] = 0
     return best
+
+
+def _window_cusps(task):
+    """Cusp p* (> 1/2) of one n inside the windows: one windowed tie table for all of them."""
+    import obd_core
+
+    n, windows, min_pair_mass = task
+    t = obd_core.tie_table(n, p_range=windows, min_pair_mass=min_pair_mass)
+    return n, t["pstar"][t["is_cusp"]]
+
+
+def _windows(points: np.ndarray, r: float, p_floor: float) -> list[tuple[float, float]]:
+    """[p - r, p + r] around each (sorted) point, merged where they overlap or nearly touch."""
+    out: list[list[float]] = []
+    for p in points.tolist():
+        lo, hi = max(p - r, p_floor), p + r
+        if out and lo <= out[-1][1] + 2 * r:
+            out[-1][1] = hi
+        else:
+            out.append([lo, hi])
+    return [(a, b) for a, b in out]
+
+
+def extend_first_n(first: np.ndarray, grid: np.ndarray, r: float, n_from: int, n_to: int, *,
+                   p_max: float, min_pair_mass: float | None = None, workers: int = 8,
+                   verbose: bool = False) -> np.ndarray:
+    """Fill in ``first`` (0 = not reached) for n = n_from+1 .. n_to, searching only near the p not
+    yet reached (p <= p_max), with windowed tie tables.  Returns the updated copy."""
+    import time
+    from concurrent.futures import ProcessPoolExecutor
+
+    first = first.copy()
+    block = 4 * workers
+    t0 = time.time()
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        n = n_from + 1
+        while n <= n_to:
+            todo = np.flatnonzero((first == 0) & (grid <= p_max) & (grid > 0.5 + r))
+            if todo.size == 0:
+                break
+            wins = _windows(grid[todo], r, 0.5)
+            ns = list(range(n, min(n + block, n_to + 1)))
+            for m, cps in sorted(ex.map(_window_cusps, [(k, wins, min_pair_mass) for k in ns])):
+                if cps.size == 0:
+                    continue
+                left = np.flatnonzero(first == 0)
+                g = grid[left]
+                k = np.searchsorted(np.sort(cps), g)
+                c = np.sort(cps)
+                d = np.minimum(np.abs(g - c[np.clip(k - 1, 0, c.size - 1)]), np.abs(c[np.clip(k, 0, c.size - 1)] - g))
+                first[left[d <= r]] = m
+            if verbose and (ns[0] - n_from - 1) % (block * 25) == 0:
+                print(f"  r = {r:g}: n = {ns[-1]}, {todo.size} p still open in {len(wins)} windows, "
+                      f"{time.time() - t0:.0f}s")
+            n = ns[-1] + 1
+    return first
 
 
 def load_cusps(cfg: CuspProximityExportConfig) -> tuple[np.ndarray, np.ndarray, int]:
@@ -119,7 +187,8 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
     from matplotlib.colors import to_rgb
 
     cusp_n, cusp_p, n_table = load_cusps(cfg)
-    n_top = int(cusp_n.max())
+    n_data = int(cusp_n.max())
+    n_top = max(n_data, cfg.extend_to or 0)
     r_min = min(cfg.r_values)
 
     # Smallest r first: it has the most points; the sparser grids of larger r draw on top of it.
@@ -146,6 +215,9 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
         grid = _grid(cfg, r)
         n_points[r] = grid.size
         first = first_n_within_r(cusp_n, cusp_p, grid, r)
+        if cfg.extend_to is not None and cfg.extend_to > n_data:
+            first = extend_first_n(first, grid, r, n_data, cfg.extend_to, p_max=cfg.extend_p_max,
+                                   min_pair_mass=cfg.min_pair_mass, workers=cfg.workers, verbose=verbose)
         hit = first > 0
         y = first[hit] * scale[r]
         ax.scatter(grid[hit], y, s=sizes[r], lw=0, color=color, rasterized=True)
@@ -193,7 +265,10 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
             else "How far up n must go before a cusp comes within r of p")
     ax.set_title(f"{head}  (r = {r_text}; {pts}; cusps of n = 2–{n_top})"
                  + (f"\ncusps for n ≤ {n_table}: OBD tie tables; n = {n_table + 1}–{n_top}: ordered-binomial-cusps "
-                    "catalogue (identical for n ≤ 1000)" if n_top > n_table else "")
+                    "catalogue (identical for n ≤ 1000)" if n_data > n_table else "")
+                 + (f"\nn = {n_data + 1}–{n_top}: windowed search near the p not yet reached, p ≤ {cfg.extend_p_max:g}"
+                    + (f", pairs with f(i) ≥ {cfg.min_pair_mass:g} only" if cfg.min_pair_mass else "")
+                    if n_top > n_data else "")
                  + ("\ndotted lines: n = " + str(n_top) + " for each r" if scaled and len(r_sorted) > 1 else ""),
                  fontsize=11)
     if len(r_sorted) > 1:
