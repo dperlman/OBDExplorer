@@ -14,7 +14,7 @@ anything already built; to rebuild one part from scratch, delete it first.
 |---|---|---|---|---|
 | tie tables: every tie point of each n = 2–1000, with E, exact slopes, log₁₀ D and certified cusp flags | `tie_points/n=NNNNN/part.parquet` + `tie_points/manifest.json` | 5.1 GB | `--save-tie-points` (~2 min) | explorers 5–7, heatmaps, Qt GUI tie lines, cusp table |
 | cusp table: every certified cusp of every n | `tie_cusps.parquet` | 12 MB | `--save-cusp-data` (~6 s) | `plot_last_cusp_features.py`, `cusp-proximity` plot |
-| window cache: cusps found by the cusp-proximity plot's search past the tables, and the p intervals searched for each n | `cusp_windows/{coverage,cusps}/part-*.parquet` | grows with use (~0.5 MB per 1000 n at r = 1e-5) | `cusp-proximity --extend-to N` (reruns reuse it) | `cusp-proximity --extend-to N` |
+| window caches: what the cusp-proximity plot's search past the tables found (cusps, or every tie point with `--points ties`), and the p intervals searched for each n | `cusp_windows/{coverage,cusps}/part-*.parquet`, `tie_windows/{coverage,ties}/part-*.parquet` | grows with use (~0.5 MB per 1000 n at r = 1e-5) | `cusp-proximity --extend-to N` (reruns reuse it) | `cusp-proximity --extend-to N` |
 | graph data: masses, their ranking and E on a 1001-point p grid, n = 2–1000 | `graph_data_p01001.h5` (HDF5) | 3.0 GB | `--save-graph-data` (~40 s) | explorers 1–4, graph export, Qt GUI |
 
 `--all` runs the three in the order graph, tie points, cusp table. Building the tie tables also
