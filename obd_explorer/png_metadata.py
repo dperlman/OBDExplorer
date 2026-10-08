@@ -87,11 +87,15 @@ def read_png_text(path: str) -> dict[str, str]:
     return out
 
 
-def _git_commit() -> str:
+def _git_commit(exclude: str | None = None) -> str:
+    """HEAD, with "+dirty" if tracked files differ from it; ``exclude`` (the file just written) is not counted."""
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         sha = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "-C", here, "diff", "--quiet", "HEAD"]).returncode != 0
+        cmd = ["git", "-C", here, "diff", "--quiet", "HEAD"]
+        if exclude is not None:
+            cmd += ["--", ".", ":(exclude)" + os.path.relpath(os.path.abspath(exclude), here)]
+        dirty = subprocess.run(cmd).returncode != 0
         return sha + ("+dirty" if dirty else "")
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
@@ -116,7 +120,7 @@ def stamp_export(path: str, cfg, args=None) -> None:
     settings = dataclasses.asdict(cfg) if dataclasses.is_dataclass(cfg) else dict(cfg)
     items["obd:settings"] = json.dumps(settings, default=str, sort_keys=True)
     items["obd:obd_core"] = core
-    items["obd:git_commit"] = _git_commit()
+    items["obd:git_commit"] = _git_commit(exclude=path)
     items["obd:created"] = datetime.now().isoformat(timespec="seconds")
     write_png_text(path, items)
 
