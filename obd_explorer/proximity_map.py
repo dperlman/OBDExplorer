@@ -13,6 +13,11 @@ sqrt(r)) and 1/3 for tie points (~ (3 ln 2 / r)^(1/3)) -- so the background is l
 from it (the Farey spikes of the cusps, the edges) stands out.  Each pixel averages over ``samples``
 values of p inside its column.  Grey: more than half of the column needs n beyond the data.
 
+``points = "lag"`` combines the two: log10(FCW / FTW), where FTW is the same function for tie points.
+Every cusp is a tie point, so FCW >= FTW: the lag is how many more n pass, after the first tie point
+comes within r of p, before one that close is a cusp.  Its trend r^(-1/2) / r^(-1/3) = r^(-1/6) is
+divided out (alpha = 1/6).
+
 Data: cusps from the cusp table plus ordered-binomial-cusps' catalogue (n <= 5000, every cusp of
 every n); tie points from OBD's tie tables (n <= 1000).  No windowed search: the record distance
 needs every point of every n, which only the complete tables have.
@@ -31,12 +36,12 @@ from obd_explorer.constants import FIGURE_BACKGROUND
 
 @dataclasses.dataclass
 class ProximityMapConfig:
-    points: str = "cusps"               # "cusps" or "ties"
+    points: str = "cusps"               # "cusps", "ties", or "lag" (cusps over ties)
     p_min: float = 0.5
     p_max: float | None = None          # None: 0.657 for cusps, 1.0 for ties
     r_min: float = 1e-8
     r_max: float = 1e-2
-    alpha: float | None = None          # None: 1/2 for cusps, 1/3 for ties
+    alpha: float | None = None          # None: 1/2 for cusps, 1/3 for ties, 1/6 for lag
     samples: int = 4                    # values of p per pixel column
     n_max: int | None = None            # None: all the complete data
     label_denominator: int | None = None  # label fractions a/b with b <= this (None: 12 cusps, 8 ties)
@@ -141,14 +146,20 @@ def export_proximity_map(cfg: ProximityMapConfig, verbose: bool = False) -> None
     from matplotlib.ticker import FixedLocator, FuncFormatter
 
     ties = cfg.points == "ties"
+    lag = cfg.points == "lag"
     if cfg.p_max is None:
         cfg.p_max = 1.0 if ties else 0.657
     if cfg.alpha is None:
-        cfg.alpha = 1 / 3 if ties else 1 / 2
+        cfg.alpha = 1 / 3 if ties else 1 / 6 if lag else 1 / 2
     bmax = cfg.label_denominator or (8 if ties else 12)
     word = "tie point" if ties else "cusp"
     fw, fh, left, bottom, w, h = _layout(cfg)
-    mean, reached, r_rows, n_last = compute_map(cfg, w, h, verbose)
+    if lag:
+        mc, rc, r_rows, n_last = compute_map(dataclasses.replace(cfg, points="cusps"), w, h, verbose)
+        mt, rt, _, n_ties = compute_map(dataclasses.replace(cfg, points="ties"), w, h, verbose)
+        mean, reached = mc - mt, np.minimum(rc, rt)          # mean log10(FCW) - mean log10(FTW)
+    else:
+        mean, reached, r_rows, n_last = compute_map(cfg, w, h, verbose)
     val = mean + cfg.alpha * np.log10(r_rows)[:, None]     # log10(FCW r^alpha), mean over the samples
     unknown = reached < 0.5
     ok = np.isfinite(val) & ~unknown
@@ -178,14 +189,25 @@ def export_proximity_map(cfg: ProximityMapConfig, verbose: bool = False) -> None
     top.tick_params(length=3, pad=1)
     cax = fig.add_axes([(left + w + 0.015 * fw) / fw, bottom / fh, 0.012, h / fh])
     cb = fig.colorbar(ScalarMappable(norm, cmap), cax=cax)
-    a_txt = "½" if abs(cfg.alpha - 0.5) < 1e-9 else "⅓" if abs(cfg.alpha - 1 / 3) < 1e-9 else f"{cfg.alpha:g}"
-    cb.set_label(f"log₁₀(first n · r^{a_txt})", fontsize=9)
-    src = (f"{word}s of n ≤ {n_last}: OBD tie tables" if ties else
-           f"cusps of n ≤ {n_last}: OBD cusp table (n ≤ 1000) and the ordered-binomial-cusps catalogue")
-    fig.suptitle(f"First n with a {word} within r of p, every r at once  (colour: log₁₀(first n · r^{a_txt}))\n"
-                 f"{w * cfg.samples:,} values of p, {cfg.samples} per pixel column; {src}\n"
-                 f"grey: more than half the column needs n > {n_last}; fractions with denominator ≤ {bmax} marked above",
-                 fontsize=10, y=1 - 0.008)
+    a_txt = {0.5: "½", 1 / 3: "⅓", 1 / 6: "⅙"}.get(min((0.5, 1 / 3, 1 / 6), key=lambda a: abs(a - cfg.alpha)))
+    if min(abs(a - cfg.alpha) for a in (0.5, 1 / 3, 1 / 6)) > 1e-9:
+        a_txt = f"{cfg.alpha:g}"
+    if lag:
+        cb.set_label(f"log₁₀(FCW / FTW · r^{a_txt})", fontsize=9)
+        fig.suptitle(f"Cusp lag: first n with a cusp within r of p (FCW) over first n with any tie point within r (FTW)  "
+                     f"(colour: log₁₀(FCW/FTW · r^{a_txt}))\n"
+                     f"{w * cfg.samples:,} values of p, {cfg.samples} per pixel column; cusps of n ≤ {n_last} "
+                     f"(OBD cusp table and the ordered-binomial-cusps catalogue), tie points of n ≤ {n_ties} (OBD tie tables)\n"
+                     f"grey: more than half the column unreached by either; fractions with denominator ≤ {bmax} marked above",
+                     fontsize=10, y=1 - 0.008)
+    else:
+        cb.set_label(f"log₁₀(first n · r^{a_txt})", fontsize=9)
+        src = (f"{word}s of n ≤ {n_last}: OBD tie tables" if ties else
+               f"cusps of n ≤ {n_last}: OBD cusp table (n ≤ 1000) and the ordered-binomial-cusps catalogue")
+        fig.suptitle(f"First n with a {word} within r of p, every r at once  (colour: log₁₀(first n · r^{a_txt}))\n"
+                     f"{w * cfg.samples:,} values of p, {cfg.samples} per pixel column; {src}\n"
+                     f"grey: more than half the column needs n > {n_last}; fractions with denominator ≤ {bmax} marked above",
+                     fontsize=10, y=1 - 0.008)
     fig.savefig(cfg.output_path, dpi=cfg.dpi, facecolor=FIGURE_BACKGROUND)
     plt.close(fig)
     if verbose:
