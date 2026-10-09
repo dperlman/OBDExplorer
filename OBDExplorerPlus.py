@@ -1376,6 +1376,26 @@ def _run_proximity_map(args: argparse.Namespace) -> None:
     stamp_export(cfg.output_path, cfg, args)
 
 
+def _run_pair_map(args: argparse.Namespace) -> None:
+    from obd_explorer.pair_map import PairMapConfig, export_pair_map
+
+    cfg = PairMapConfig(
+        n=args.n,
+        p_min=args.p_min,
+        p_max=args.p_max,
+        width_max=args.width_max,
+        decades=args.decades,
+        workers=args.workers,
+        width_in=args.width_in,
+        height_in=args.height_in,
+        dpi=args.dpi,
+        output_path=_resolved_export_output_path(args.output, "png"),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_pair_map(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
+
+
 def _run_html(args: argparse.Namespace) -> None:
     raw_out = getattr(args, "output", None)
     if raw_out is None or not str(raw_out).strip():
@@ -1887,6 +1907,21 @@ def main() -> None:
     p_pm.add_argument("--height-in", type=float, default=7.0)
     p_pm.add_argument("--dpi", type=int, default=600)
 
+    p_pr = sub.add_parser(
+        "pair-map",
+        help="Every tie point of one n in pair space (grid position x width/sqrt(n)), coloured by u = S_-/kappa.",
+    )
+    p_pr.add_argument("-o", "--output", required=True)
+    p_pr.add_argument("--n", type=int, default=1000)
+    p_pr.add_argument("--p-min", type=float, default=0.5)
+    p_pr.add_argument("--p-max", type=float, default=0.7)
+    p_pr.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
+    p_pr.add_argument("--decades", type=float, default=6.0, help="Blue/red shading range in log10 |u|.")
+    p_pr.add_argument("--workers", type=int, default=8)
+    p_pr.add_argument("--width-in", type=float, default=12.0)
+    p_pr.add_argument("--height-in", type=float, default=7.0)
+    p_pr.add_argument("--dpi", type=int, default=600)
+
     args = parser.parse_args()
     if args.cmd is None:
         _interactive()
@@ -1905,6 +1940,8 @@ def main() -> None:
         _run_cusp_proximity_export(args)
     elif args.cmd == "proximity-map":
         _run_proximity_map(args)
+    elif args.cmd == "pair-map":
+        _run_pair_map(args)
 
 
 if __name__ == "__main__":
