@@ -1885,8 +1885,9 @@ def main() -> None:
         help="First n with a cusp (or tie point) within r of p, over the whole (p, r) plane, as one image.",
     )
     p_pm.add_argument("-o", "--output", required=True)
-    p_pm.add_argument("--points", choices=("cusps", "ties", "lag"), default="cusps",
-                      help="lag: log10(FCW/FTW), the cusp map over the tie-point map.")
+    p_pm.add_argument("--points", choices=("cusps", "ties", "lag", "grid", "residual"), default="cusps",
+                      help="lag: log10(FCW/FTW), cusps over tie points. grid: the bare fractions k/(2(n+1)). "
+                      "residual: log10(FCW/F), cusps over that grid.")
     p_pm.add_argument("--p-min", type=float, default=0.5)
     p_pm.add_argument("--p-max", type=float, default=None, help="Default 0.657 for cusps, 1 for ties.")
     p_pm.add_argument("--r-min", type=float, default=1e-8)
@@ -1895,7 +1896,7 @@ def main() -> None:
         "--alpha",
         type=float,
         default=None,
-        help="Colour is log10(first n * r^alpha); default 1/2 for cusps, 1/3 for ties, 1/6 for lag (the measured trends).",
+        help="Colour is log10(first n * r^alpha); default 1/2 for cusps and grid, 1/3 for ties, 1/6 for lag, 0 for residual.",
     )
     p_pm.add_argument("--samples", type=int, default=4, help="Values of p per pixel column (default 4).")
     p_pm.add_argument("--n-max", type=int, default=None, help="Use only n <= this (default: all complete data).")

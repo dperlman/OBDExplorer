@@ -18,6 +18,13 @@ Every cusp is a tie point, so FCW >= FTW: the lag is how many more n pass, after
 comes within r of p, before one that close is a cusp.  Its trend r^(-1/2) / r^(-1/3) = r^(-1/6) is
 divided out (alpha = 1/6).
 
+``points = "grid"`` is the same function for the bare grid of fractions k/(2(n+1)), which cusps sit
+just above (RESEARCH_LOG fact 12): F(p, r) = the first n with a fraction k/(2(n+1)) within r of p,
+pure arithmetic.  ``points = "residual"`` draws log10(FCW / F): where cusps follow the grid (near
+0), where they reach p sooner than the grid alone (negative: off-grid offsets, several cusps per
+grid point) and where later (positive: grid points that carry no cusp).  No trend to remove
+(alpha = 0): both grow like r^(-1/2).
+
 Data: cusps from the cusp table plus ordered-binomial-cusps' catalogue (n <= 5000, every cusp of
 every n); tie points from OBD's tie tables (n <= 1000).  No windowed search: the record distance
 needs every point of every n, which only the complete tables have.
@@ -36,12 +43,12 @@ from obd_explorer.constants import FIGURE_BACKGROUND
 
 @dataclasses.dataclass
 class ProximityMapConfig:
-    points: str = "cusps"               # "cusps", "ties", or "lag" (cusps over ties)
+    points: str = "cusps"               # "cusps", "ties", "lag" (cusps over ties), "grid", "residual" (cusps over grid)
     p_min: float = 0.5
     p_max: float | None = None          # None: 0.657 for cusps, 1.0 for ties
     r_min: float = 1e-8
     r_max: float = 1e-2
-    alpha: float | None = None          # None: 1/2 for cusps, 1/3 for ties, 1/6 for lag
+    alpha: float | None = None          # None: 1/2 cusps and grid, 1/3 ties, 1/6 lag, 0 residual
     samples: int = 4                    # values of p per pixel column
     n_max: int | None = None            # None: all the complete data
     label_denominator: int | None = None  # label fractions a/b with b <= this (None: 12 cusps, 8 ties)
@@ -67,6 +74,14 @@ def _layout(cfg):
 
 def _point_sets(cfg):
     """Yield (n, sorted p of every point of n) for n = 2, 3, ..., and finally the last n."""
+    if cfg.points == "grid":
+        # every fraction k/(2(n+1)) that can come within r_max of [p_min, p_max], n = 2..n_max
+        n_max = cfg.n_max or 5000
+        for n in range(2, n_max + 1):
+            d = 2 * (n + 1)
+            k = np.arange(math.floor((cfg.p_min - cfg.r_max) * d), math.ceil((cfg.p_max + cfg.r_max) * d) + 1)
+            yield n, k / d
+        return
     if cfg.points == "ties":
         from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_tables, load_tie_manifest
 
@@ -147,25 +162,32 @@ def export_proximity_map(cfg: ProximityMapConfig, verbose: bool = False) -> None
 
     ties = cfg.points == "ties"
     lag = cfg.points == "lag"
+    resid = cfg.points == "residual"
     if cfg.p_max is None:
         cfg.p_max = 1.0 if ties else 0.657
     if cfg.alpha is None:
-        cfg.alpha = 1 / 3 if ties else 1 / 6 if lag else 1 / 2
+        cfg.alpha = 1 / 3 if ties else 1 / 6 if lag else 0.0 if resid else 1 / 2
     bmax = cfg.label_denominator or (8 if ties else 12)
-    word = "tie point" if ties else "cusp"
+    word = "tie point" if ties else "fraction k/(2(n+1))" if cfg.points == "grid" else "cusp"
     fw, fh, left, bottom, w, h = _layout(cfg)
     if lag:
         mc, rc, r_rows, n_last = compute_map(dataclasses.replace(cfg, points="cusps"), w, h, verbose)
         mt, rt, _, n_ties = compute_map(dataclasses.replace(cfg, points="ties"), w, h, verbose)
         mean, reached = mc - mt, np.minimum(rc, rt)          # mean log10(FCW) - mean log10(FTW)
+    elif resid:
+        mc, rc, r_rows, n_last = compute_map(dataclasses.replace(cfg, points="cusps"), w, h, verbose)
+        mg, rg, _, _ = compute_map(dataclasses.replace(cfg, points="grid", n_max=cfg.n_max or n_last), w, h, verbose)
+        mean, reached = mc - mg, np.minimum(rc, rg)          # mean log10(FCW) - mean log10(F)
     else:
         mean, reached, r_rows, n_last = compute_map(cfg, w, h, verbose)
     val = mean + cfg.alpha * np.log10(r_rows)[:, None]     # log10(FCW r^alpha), mean over the samples
     unknown = reached < 0.5
     ok = np.isfinite(val) & ~unknown
     vmin, vmax = np.quantile(val[ok], [0.005, 0.995])
+    if resid:                                                # diverging, centred on "follows the grid"
+        vmax = max(abs(vmin), abs(vmax)); vmin = -vmax
     norm = Normalize(vmin, vmax)
-    cmap = plt.get_cmap(cfg.colormap)
+    cmap = plt.get_cmap("RdBu_r" if resid and cfg.colormap == "magma" else cfg.colormap)
     rgb = cmap(norm(np.where(ok, val, vmin)))[..., :3]
     rgb[~ok] = (0.82, 0.82, 0.82)
 
@@ -192,7 +214,15 @@ def export_proximity_map(cfg: ProximityMapConfig, verbose: bool = False) -> None
     a_txt = {0.5: "½", 1 / 3: "⅓", 1 / 6: "⅙"}.get(min((0.5, 1 / 3, 1 / 6), key=lambda a: abs(a - cfg.alpha)))
     if min(abs(a - cfg.alpha) for a in (0.5, 1 / 3, 1 / 6)) > 1e-9:
         a_txt = f"{cfg.alpha:g}"
-    if lag:
+    if resid:
+        cb.set_label("log₁₀(FCW / F)   (blue: cusps sooner than the grid; red: later)", fontsize=8)
+        fig.suptitle(f"Cusps against the grid of fractions k/(2(n+1)): log₁₀(FCW / F), F = first n with a fraction "
+                     f"k/(2(n+1)) within r of p\n"
+                     f"{w * cfg.samples:,} values of p, {cfg.samples} per pixel column; cusps of n ≤ {n_last} "
+                     f"(OBD cusp table and the ordered-binomial-cusps catalogue), fractions of the same n\n"
+                     f"grey: more than half the column unreached by either; fractions with denominator ≤ {bmax} marked above",
+                     fontsize=10, y=1 - 0.008)
+    elif lag:
         cb.set_label(f"log₁₀(FCW / FTW · r^{a_txt})", fontsize=9)
         fig.suptitle(f"Cusp lag: first n with a cusp within r of p (FCW) over first n with any tie point within r (FTW)  "
                      f"(colour: log₁₀(FCW/FTW · r^{a_txt}))\n"
