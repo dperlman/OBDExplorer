@@ -1396,6 +1396,24 @@ def _run_pair_map(args: argparse.Namespace) -> None:
     stamp_export(cfg.output_path, cfg, args)
 
 
+def _run_sawtooth(args: argparse.Namespace) -> None:
+    from obd_explorer.sawtooth import SawtoothConfig, export_sawtooth
+
+    cfg = SawtoothConfig(
+        n=args.n,
+        p=args.p,
+        steps=args.steps,
+        samples=args.samples,
+        width_in=args.width_in,
+        height_in=args.height_in,
+        dpi=args.dpi,
+        output_path=_resolved_export_output_path(args.output, "png"),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_sawtooth(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
+
+
 def _run_html(args: argparse.Namespace) -> None:
     raw_out = getattr(args, "output", None)
     if raw_out is None or not str(raw_out).strip():
@@ -1923,6 +1941,19 @@ def main() -> None:
     p_pr.add_argument("--height-in", type=float, default=7.0)
     p_pr.add_argument("--dpi", type=int, default=600)
 
+    p_st = sub.add_parser(
+        "sawtooth",
+        help="E and its slope over a few grid steps 1/(2(n+1)): how the clusters of tie points make the cusps.",
+    )
+    p_st.add_argument("-o", "--output", required=True)
+    p_st.add_argument("--n", type=int, default=1000)
+    p_st.add_argument("--p", type=float, default=0.6, help="The window starts half a grid step below this.")
+    p_st.add_argument("--steps", type=float, default=3.0, help="Window width in grid steps 1/(2(n+1)).")
+    p_st.add_argument("--samples", type=int, default=60001, help="Dense p grid for E and its slope.")
+    p_st.add_argument("--width-in", type=float, default=12.0)
+    p_st.add_argument("--height-in", type=float, default=8.0)
+    p_st.add_argument("--dpi", type=int, default=200)
+
     args = parser.parse_args()
     if args.cmd is None:
         _interactive()
@@ -1943,6 +1974,8 @@ def main() -> None:
         _run_proximity_map(args)
     elif args.cmd == "pair-map":
         _run_pair_map(args)
+    elif args.cmd == "sawtooth":
+        _run_sawtooth(args)
 
 
 if __name__ == "__main__":
