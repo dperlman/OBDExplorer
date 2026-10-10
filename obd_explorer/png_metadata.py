@@ -90,7 +90,7 @@ def read_png_text(path: str) -> dict[str, str]:
 def _git_commit(exclude: str | None = None) -> str:
     """HEAD, with "+dirty" if tracked files differ from it.
 
-    Generated images (PNG, PDF, SVG) and ``exclude`` (the file just written) are not counted: they
+    Generated images (PNG, PDF, SVG, GIF, MP4) and ``exclude`` (the file just written) are not counted: they
     are outputs, nothing reads them, and regenerating several plots in a row would otherwise mark
     every one after the first as dirty.
     """
@@ -98,7 +98,8 @@ def _git_commit(exclude: str | None = None) -> str:
     try:
         sha = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
         cmd = ["git", "-C", here, "diff", "--quiet", "HEAD", "--", ".",
-               ":(exclude,glob)**/*.png", ":(exclude,glob)**/*.pdf", ":(exclude,glob)**/*.svg"]
+               ":(exclude,glob)**/*.png", ":(exclude,glob)**/*.pdf", ":(exclude,glob)**/*.svg",
+               ":(exclude,glob)**/*.gif", ":(exclude,glob)**/*.mp4"]
         rel = os.path.relpath(os.path.abspath(exclude), here) if exclude is not None else None
         if rel is not None and not rel.startswith(".."):              # only a path inside the repo
             cmd.append(":(exclude)" + rel)
@@ -112,6 +113,11 @@ def stamp_export(path: str, cfg, args=None) -> None:
     """Record how ``path`` was made inside it (PNG only; other formats are left alone)."""
     if not str(path).lower().endswith(".png") or not os.path.isfile(path):
         return
+    write_png_text(path, stamp_items(path, cfg, args))
+
+
+def stamp_items(path: str, cfg, args=None) -> dict[str, str]:
+    """The obd:* entries for ``path`` (also written into videos, as one JSON comment)."""
     try:
         from importlib.metadata import version
 
@@ -129,7 +135,7 @@ def stamp_export(path: str, cfg, args=None) -> None:
     items["obd:obd_core"] = core
     items["obd:git_commit"] = _git_commit(exclude=path)
     items["obd:created"] = datetime.now().isoformat(timespec="seconds")
-    write_png_text(path, items)
+    return items
 
 
 if __name__ == "__main__":

@@ -1396,6 +1396,27 @@ def _run_pair_map(args: argparse.Namespace) -> None:
     stamp_export(cfg.output_path, cfg, args)
 
 
+def _run_pair_map_movie(args: argparse.Namespace) -> None:
+    from obd_explorer.pair_map_movie import PairMapMovieConfig, export_pair_map_movie
+
+    cfg = PairMapMovieConfig(
+        n_min=args.n_min,
+        n_max=args.n_max,
+        frames=args.frames,
+        fps=args.fps,
+        hold_end=args.hold_end,
+        p_min=args.p_min,
+        p_max=args.p_max,
+        width_max=args.width_max,
+        supersample=args.supersample,
+        workers=args.workers,
+        gif_width=args.gif_width,
+        frames_dir=args.frames_dir,
+        outputs=tuple(args.output),
+    )
+    export_pair_map_movie(cfg, args, verbose=True)
+
+
 def _run_sawtooth(args: argparse.Namespace) -> None:
     from obd_explorer.sawtooth import SawtoothConfig, export_sawtooth
 
@@ -1943,6 +1964,24 @@ def main() -> None:
     p_pr.add_argument("--height-in", type=float, default=7.0)
     p_pr.add_argument("--dpi", type=int, default=600)
 
+    p_pmm = sub.add_parser(
+        "pair-map-movie",
+        help="The pair-space picture at log-spaced n, as a looping animation (.gif and/or .mp4).",
+    )
+    p_pmm.add_argument("-o", "--output", action="append", required=True, help="Output .gif or .mp4 (repeatable).")
+    p_pmm.add_argument("--n-min", type=int, default=50)
+    p_pmm.add_argument("--n-max", type=int, default=8000)
+    p_pmm.add_argument("--frames", type=int, default=100, help="Number of log-spaced n values.")
+    p_pmm.add_argument("--fps", type=float, default=10.0)
+    p_pmm.add_argument("--hold-end", type=float, default=2.0, help="Seconds the last frame stays up before looping.")
+    p_pmm.add_argument("--p-min", type=float, default=0.5)
+    p_pmm.add_argument("--p-max", type=float, default=0.7)
+    p_pmm.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
+    p_pmm.add_argument("--supersample", type=int, default=3, help="Average k x k samples per pixel.")
+    p_pmm.add_argument("--workers", type=int, default=8)
+    p_pmm.add_argument("--gif-width", type=int, default=1280, help="GIF width in pixels.")
+    p_pmm.add_argument("--frames-dir", default="plots/pair-map-frames", help="Cache of rendered frames.")
+
     p_st = sub.add_parser(
         "sawtooth",
         help="E and its slope over a few grid steps 1/(2(n+1)): how the clusters of tie points make the cusps.",
@@ -1978,6 +2017,8 @@ def main() -> None:
         _run_proximity_map(args)
     elif args.cmd == "pair-map":
         _run_pair_map(args)
+    elif args.cmd == "pair-map-movie":
+        _run_pair_map_movie(args)
     elif args.cmd == "sawtooth":
         _run_sawtooth(args)
 

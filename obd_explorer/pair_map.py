@@ -12,6 +12,9 @@ the slope jump (kappa = (j-i) f(i)): the tie point is a cusp exactly when -1 < u
 Blue and red deepen with log10 |u| (resp. log10(1+u)) over six decades.  u is formed in logs from
 ln f(i), so tie points whose kink underflows double range do not overflow.  The verdicts are
 OBD-core's certified ones (tie_table); u itself is double precision.
+
+With supersample = k each pixel is the average of k x k samples, so that when a pixel spans several
+lattice points (large n, small image) it shows their mix instead of one of them picked at random.
 """
 
 from __future__ import annotations
@@ -33,6 +36,8 @@ class PairMapConfig:
     width_max: float = 8.0              # top of the plot, in units of sqrt(n)
     decades: float = 6.0                # blue/red shading range in log10 |u|
     workers: int = 8
+    supersample: int = 1                # average k x k samples per pixel
+    n_label: bool = False               # a large "n = ..." in the corner (for animation frames)
     width_in: float = 12.0
     height_in: float = 7.0
     dpi: int = 600
@@ -42,14 +47,16 @@ class PairMapConfig:
 _MARGIN = {"left": 0.07, "right": 0.17, "bottom": 0.085, "top": 0.1}
 
 
-def pair_u(n: int, workers: int = 8, verbose: bool = False) -> tuple[np.ndarray, np.ndarray]:
+def pair_u(n: int, workers: int = 8, verbose: bool = False, pool=None) -> tuple[np.ndarray, np.ndarray]:
     """(U, C): U[i, m] = u = S_-/kappa of the tie point (i, i+m), C[i, m] its certified cusp flag."""
     from multiprocessing import Pool
 
     import obd_core
 
     t0 = time.time()
-    if workers > 1:
+    if pool is not None:
+        tab = obd_core.tie_table(n, workers=workers, pool=pool)
+    elif workers > 1:
         with Pool(workers) as pool:
             tab = obd_core.tie_table(n, workers=workers, pool=pool)
     else:
@@ -68,7 +75,7 @@ def pair_u(n: int, workers: int = 8, verbose: bool = False) -> tuple[np.ndarray,
     return U, C
 
 
-def export_pair_map(cfg: PairMapConfig, verbose: bool = False) -> None:
+def export_pair_map(cfg: PairMapConfig, verbose: bool = False, pool=None) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -77,19 +84,21 @@ def export_pair_map(cfg: PairMapConfig, verbose: bool = False) -> None:
     from matplotlib.colors import LinearSegmentedColormap, Normalize
 
     n = cfg.n
-    U, C = pair_u(n, cfg.workers, verbose)
+    U, C = pair_u(n, cfg.workers, verbose, pool)
+    ss = max(int(cfg.supersample), 1)
     fw, fh = int(round(cfg.width_in * cfg.dpi)), int(round(cfg.height_in * cfg.dpi))
     left, bottom = int(round(_MARGIN["left"] * fw)), int(round(_MARGIN["bottom"] * fh))
     w = fw - left - int(round(_MARGIN["right"] * fw))
     h = fh - bottom - int(round(_MARGIN["top"] * fh))
-    xs = cfg.p_min + (np.arange(w) + 0.5) / w * (cfg.p_max - cfg.p_min)
-    ys = (np.arange(h) + 0.5) / h * cfg.width_max
+    xs = cfg.p_min + (np.arange(w * ss) + 0.5) / (w * ss) * (cfg.p_max - cfg.p_min)
+    ys = (np.arange(h * ss) + 0.5) / (h * ss) * cfg.width_max
     X, Y = np.meshgrid(xs, ys)
-    m = np.clip(np.round(Y * math.sqrt(n)).astype(np.int64), 1, n - 1)
+    m_raw = np.round(Y * math.sqrt(n)).astype(np.int64)
+    m = np.clip(m_raw, 1, n - 1)                             # rows past width n-1 (small n) stay blank
     # nearest i + j + 1 = 2(n+1)x with the parity of the width: i + j = n + band, j - i = m
     s0 = np.round((2 * (n + 1) * X - 1 - m) / 2) * 2 + 1 + m
     i = ((s0 - 1 - m) // 2).astype(np.int64)
-    ok = (i >= 1) & (i + m <= n) & (2 * i + m > n)
+    ok = (i >= 1) & (i + m <= n) & (2 * i + m > n) & (m_raw <= n - 1)
     u = np.full(X.shape, np.nan)
     cusp = np.zeros(X.shape, bool)
     u[ok] = U[i[ok], m[ok]]
@@ -103,11 +112,16 @@ def export_pair_map(cfg: PairMapConfig, verbose: bool = False) -> None:
     rgb[fall] = blues(0.2 + 0.8 * lv(-u[fall]))[:, :3]
     rgb[rise] = reds(0.2 + 0.8 * lv(1 + np.maximum(u[rise], 0)))[:, :3]
     rgb[cusp] = greens(np.clip(-u[cusp], 0, 1))[:, :3]
+    if ss > 1:
+        rgb = rgb.reshape(h, ss, w, ss, 3).mean(axis=(1, 3))
 
     fig = plt.figure(figsize=(fw / cfg.dpi, fh / cfg.dpi), dpi=cfg.dpi, facecolor=FIGURE_BACKGROUND)
     ax = fig.add_axes([left / fw, bottom / fh, w / fw, h / fh])
     ax.imshow(rgb, extent=[cfg.p_min, cfg.p_max, 0, cfg.width_max], origin="lower", aspect="auto",
               interpolation="none")
+    if cfg.n_label:
+        ax.text(0.985, 0.975, f"n = {n}", transform=ax.transAxes, ha="right", va="top", fontsize=22,
+                bbox=dict(facecolor="white", edgecolor="0.6", alpha=0.9, pad=6))
     ax.set_xlabel("grid position (i+j+1) / (2(n+1))  ≈  p*")
     ax.set_ylabel("width (j − i) / √n")
     bar_w, gap = 0.010, 0.045
