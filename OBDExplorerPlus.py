@@ -1397,6 +1397,24 @@ def _run_pair_map(args: argparse.Namespace) -> None:
     stamp_export(cfg.output_path, cfg, args)
 
 
+def _run_ij_map(args: argparse.Namespace) -> None:
+    from obd_explorer.ij_map import IJMapConfig, export_ij_map
+
+    cfg = IJMapConfig(
+        n=args.n,
+        zoom=tuple(args.zoom) if args.zoom else None,
+        decades=args.decades,
+        supersample=args.supersample,
+        workers=args.workers,
+        panel_px=args.panel_px,
+        dpi=args.dpi,
+        output_path=_resolved_export_output_path(args.output, "png"),
+    )
+    _ensure_output_parent_dir(cfg.output_path)
+    export_ij_map(cfg, verbose=True)
+    stamp_export(cfg.output_path, cfg, args)
+
+
 def _run_pair_map_movie(args: argparse.Namespace) -> None:
     from obd_explorer.pair_map_movie import PairMapMovieConfig, export_pair_map_movie
 
@@ -1965,6 +1983,19 @@ def main() -> None:
     p_pr.add_argument("--height-in", type=float, default=7.0)
     p_pr.add_argument("--dpi", type=int, default=600)
 
+    p_ij = sub.add_parser(
+        "ij-map",
+        help="Every tie point of one n in (i, j) coordinates (all pairs), coloured as in pair-map.",
+    )
+    p_ij.add_argument("-o", "--output", required=True)
+    p_ij.add_argument("--n", type=int, default=4000)
+    p_ij.add_argument("--zoom", type=int, nargs=2, metavar=("LO", "HI"), help="Add a close-up panel of LO <= i, j <= HI.")
+    p_ij.add_argument("--decades", type=float, default=6.0, help="Blue/red shading range in log10 |u|.")
+    p_ij.add_argument("--supersample", type=int, default=3, help="Average k x k samples per pixel (cusps take priority).")
+    p_ij.add_argument("--workers", type=int, default=8)
+    p_ij.add_argument("--panel-px", type=int, default=2400, help="Each panel is this many pixels square.")
+    p_ij.add_argument("--dpi", type=int, default=300)
+
     p_pmm = sub.add_parser(
         "pair-map-movie",
         help="The pair-space picture at log-spaced n, as a looping animation (.gif and/or .mp4).",
@@ -2019,6 +2050,8 @@ def main() -> None:
         _run_proximity_map(args)
     elif args.cmd == "pair-map":
         _run_pair_map(args)
+    elif args.cmd == "ij-map":
+        _run_ij_map(args)
     elif args.cmd == "pair-map-movie":
         _run_pair_map_movie(args)
     elif args.cmd == "sawtooth":
