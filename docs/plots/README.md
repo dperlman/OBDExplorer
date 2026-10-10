@@ -37,6 +37,7 @@ python -m obd_explorer.png_metadata docs/plots/N-pColorTieGraphFull.png
 | `PairMap-n100.png` | `python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n100.png --n 100` (seconds) |
 | `PairMap-n1000.png` | `python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n1000.png --n 1000` (seconds) |
 | `PairMap-n4000.png` | `python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n4000.png --n 4000` (about 20 s) |
+| `PairMap-emergence.gif`, `PairMap-emergence.mp4` | `python OBDExplorerPlus.py pair-map-movie -o docs/plots/PairMap-emergence.gif -o docs/plots/PairMap-emergence.mp4` (about 17 min for the 100 frames, 4.6 GB at n = 8000; seconds to re-encode from the cached frames) |
 | `N-pCuspGridResidualMap.png` | `python OBDExplorerPlus.py proximity-map -o docs/plots/N-pCuspGridResidualMap.png --points residual --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv` (about 10 s) |
 | `N-pCuspGridResidualMap-0.59-0.61.png` | `python OBDExplorerPlus.py proximity-map -o docs/plots/N-pCuspGridResidualMap-0.59-0.61.png --points residual --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --p-min 0.59 --p-max 0.61 --label-denominator 30` (about 10 s) |
 | `Sawtooth-n1000-p0.600.png` | `python OBDExplorerPlus.py sawtooth -o docs/plots/Sawtooth-n1000-p0.600.png --n 1000 --p 0.6` (seconds) |
