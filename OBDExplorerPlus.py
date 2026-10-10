@@ -1422,6 +1422,7 @@ def _run_pair_map_movie(args: argparse.Namespace) -> None:
         n_min=args.n_min,
         n_max=args.n_max,
         frames=args.frames,
+        spacing=args.spacing,
         fps=args.fps,
         hold_end=args.hold_end,
         ranges=tuple(tuple(r) for r in (args.range or [(0.5, 0.7)])),
@@ -2004,7 +2005,8 @@ def main() -> None:
                        help="Output .gif or .mp4 (repeatable); {range} in the name becomes e.g. 0.5-1.")
     p_pmm.add_argument("--n-min", type=int, default=50)
     p_pmm.add_argument("--n-max", type=int, default=8000)
-    p_pmm.add_argument("--frames", type=int, default=100, help="Number of log-spaced n values.")
+    p_pmm.add_argument("--frames", type=int, default=100, help="Number of n values.")
+    p_pmm.add_argument("--spacing", choices=("log", "linear"), default="log", help="How the n values are spaced.")
     p_pmm.add_argument("--fps", type=float, default=10.0)
     p_pmm.add_argument("--hold-end", type=float, default=2.0, help="Seconds the last frame stays up before looping.")
     p_pmm.add_argument("--range", type=float, nargs=2, action="append", metavar=("P_MIN", "P_MAX"),

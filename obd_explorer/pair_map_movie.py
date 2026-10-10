@@ -1,6 +1,7 @@
 """The pair-space picture (pair_map) at log-spaced n, stitched into a looping animation.
 
-Frame k shows n = round(n_min * (n_max/n_min)^(k/(frames-1))), with the same axes throughout
+Frame k shows n = round(n_min * (n_max/n_min)^(k/(frames-1))) (spacing "log"; "linear" spaces n
+evenly instead, e.g. every 10th n), with the same axes throughout
 (grid position across, width/sqrt(n) up), so the structure stays in place while it sharpens.  Frames
 are PNGs cached in frames_dir under a hash of the drawing settings: a rerun re-encodes without
 recomputing, and changing n_max or the frame count only computes the new n.  Several p ranges can be
@@ -31,6 +32,7 @@ class PairMapMovieConfig:
     n_min: int = 50
     n_max: int = 8000
     frames: int = 100
+    spacing: str = "log"                # "log" or "linear" in n
     fps: float = 10.0
     hold_end: float = 2.0               # seconds the last frame stays up before the loop restarts
     ranges: tuple[tuple[float, float], ...] = ((0.5, 0.7),)   # (p_min, p_max) per animation
@@ -47,7 +49,8 @@ class PairMapMovieConfig:
 
 
 def movie_n_values(cfg: PairMapMovieConfig) -> list[int]:
-    n = np.round(np.geomspace(cfg.n_min, cfg.n_max, cfg.frames)).astype(int)
+    space = {"log": np.geomspace, "linear": np.linspace}[cfg.spacing]
+    n = np.round(space(cfg.n_min, cfg.n_max, cfg.frames)).astype(int)
     return sorted(set(int(v) for v in n))
 
 
