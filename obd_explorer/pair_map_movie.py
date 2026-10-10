@@ -83,18 +83,17 @@ def encode(paths: list[str], cfg: PairMapMovieConfig, output: str, comment: str 
     """Stitch the frames into output (.gif or .mp4) with ffmpeg, holding the last one hold_end seconds."""
     lst = output + ".frames.txt"
     with open(lst, "w") as f:
-        for k, p in enumerate(paths):
-            d = 1 / cfg.fps + (cfg.hold_end if k == len(paths) - 1 else 0)
-            f.write(f"file '{os.path.abspath(p)}'\nduration {d:.6f}\n")
-        f.write(f"file '{os.path.abspath(paths[-1])}'\n")     # concat needs the last file twice for its duration
+        for p in paths:
+            f.write(f"file '{os.path.abspath(p)}'\nduration {1 / cfg.fps:.6f}\n")
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst]
+    hold = f"tpad=stop_mode=clone:stop_duration={cfg.hold_end}"   # concat ignores the last file's duration
     ext = os.path.splitext(output)[1].lower()
     if ext == ".gif":
-        cmd += ["-vf", f"fps={cfg.fps},scale={cfg.gif_width}:-1:flags=lanczos,split[a][b];"
+        cmd += ["-vf", f"fps={cfg.fps},{hold},scale={cfg.gif_width}:-1:flags=lanczos,split[a][b];"
                        "[a]palettegen=max_colors=256:stats_mode=full[p];[b][p]paletteuse=dither=sierra2_4a",
                 "-loop", "0"]
     elif ext == ".mp4":
-        cmd += ["-vf", f"fps={cfg.fps},format=yuv420p", "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+        cmd += ["-vf", f"fps={cfg.fps},{hold},format=yuv420p", "-c:v", "libx264", "-crf", "18", "-preset", "slow",
                 "-movflags", "+faststart"]
     else:
         raise ValueError(f"{output!r}: write .gif or .mp4")
