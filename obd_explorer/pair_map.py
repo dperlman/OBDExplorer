@@ -7,14 +7,24 @@ the slope jump (kappa = (j-i) f(i)): the tie point is a cusp exactly when -1 < u
 
     blue    u <= -1   E falls through the tie point (both one-sided slopes negative)
     red     u >= 0    E rises through it
-    green   -1 < u < 0, a cusp, shaded by u
+    bright  -1 < u < 0, a cusp: white where its V is symmetric (u = -1/2), aquamarine as u -> -1
+            (the right arm flat: it nearly kept falling), yellow as u -> 0 (the left arm flat)
+    grey    no tie point (widths past n - 1, the axis column p = 1/2)
 
-Blue and red deepen with log10 |u| (resp. log10(1+u)) over six decades.  u is formed in logs from
-ln f(i), so tie points whose kink underflows double range do not overflow.  The verdicts are
-OBD-core's certified ones (tie_table); u itself is double precision.
+Blue and red deepen with log10 |u| (resp. log10(1+u)) over six decades, from mid-lightness (CIE L*
+72 and 69) down; every cusp colour has L* >= 92, so the cusps stand out by lightness, not only by
+hue (red-green colour vision).  u is formed in logs from ln f(i), so tie points whose kink underflows
+double range do not overflow.  The verdicts are OBD-core's certified ones (tie_table); u itself is
+double precision.
 
-With supersample = k each pixel is the average of k x k samples, so that when a pixel spans several
-lattice points (large n, small image) it shows their mix instead of one of them picked at random.
+Below p = 1/2 the picture is the mirror image, by E(p) = E(1-p): the tie point (i, j) at grid
+position x mirrors to (n-j, n-i) at 1 - x with the same width, its one-sided slopes swapped and
+negated, so u -> -1 - u (falling <-> rising, aquamarine <-> yellow, white stays white).
+
+With supersample = k each pixel averages k x k samples, so that when a pixel spans several lattice
+points (large n, wide p range) it shows their mix instead of one of them picked at random; except
+that a pixel with any cusp sample shows the cusps' colour, so the cusp curve never fades into its
+neighbours.
 """
 
 from __future__ import annotations
@@ -36,7 +46,7 @@ class PairMapConfig:
     width_max: float = 8.0              # top of the plot, in units of sqrt(n)
     decades: float = 6.0                # blue/red shading range in log10 |u|
     workers: int = 8
-    supersample: int = 1                # average k x k samples per pixel
+    supersample: int = 2                # average k x k samples per pixel (cusps take priority)
     n_label: bool = False               # a large "n = ..." in the corner (for animation frames)
     width_in: float = 12.0
     height_in: float = 7.0
@@ -44,7 +54,11 @@ class PairMapConfig:
     output_path: str = "plots/PairMap.png"
 
 
-_MARGIN = {"left": 0.07, "right": 0.17, "bottom": 0.085, "top": 0.1}
+STYLE = 2                               # bump when the drawing changes: cached animation frames are redrawn
+_MARGIN = {"left": 0.07, "right": 0.17, "bottom": 0.085, "top": 0.115}
+_BLUE_FLOOR, _RED_FLOOR = 0.45, 0.40    # where the Blues / Reds ramps start: L* 72 and 69
+_CUSP_COLOURS = ("#7FFFD4", "#FFFFFF", "#FFEB3B")   # u = -1, -1/2, 0: L* 92, 100, 92
+_EMPTY = 0.5                            # grey, L* 53
 
 
 def pair_u(n: int, workers: int = 8, verbose: bool = False, pool=None) -> tuple[np.ndarray, np.ndarray]:
@@ -75,45 +89,77 @@ def pair_u(n: int, workers: int = 8, verbose: bool = False, pool=None) -> tuple[
     return U, C
 
 
-def export_pair_map(cfg: PairMapConfig, verbose: bool = False, pool=None) -> None:
+def _colour_maps():
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    blues = LinearSegmentedColormap.from_list("fall", plt.get_cmap("Blues")(np.linspace(_BLUE_FLOOR, 1, 256)))
+    reds = LinearSegmentedColormap.from_list("rise", plt.get_cmap("Reds")(np.linspace(_RED_FLOOR, 1, 256)))
+    cusp = LinearSegmentedColormap.from_list("cusp", _CUSP_COLOURS)
+    return blues, reds, cusp
+
+
+def pair_rgb(U: np.ndarray, C: np.ndarray, n: int, cfg: PairMapConfig, w: int, h: int,
+             chunk_rows: int = 64) -> np.ndarray:
+    """The (h, w, 3) image, row 0 at width 0, computed a band of rows at a time."""
+    blues, reds, cuspmap = _colour_maps()
+    ss = max(int(cfg.supersample), 1)
+    lv = lambda v: np.clip(np.log10(np.maximum(v, 1.0)) / cfg.decades, 0, 1)
+    X = cfg.p_min + (np.arange(w * ss) + 0.5) / (w * ss) * (cfg.p_max - cfg.p_min)
+    flip = X < 0.5                                           # mirror half: E(p) = E(1-p)
+    Xe = np.where(flip, 1 - X, X)
+    out = np.empty((h, w, 3), np.float32)
+    for r0 in range(0, h, chunk_rows):
+        r1 = min(r0 + chunk_rows, h)
+        ys = (np.arange(r0 * ss, r1 * ss) + 0.5) / (h * ss) * cfg.width_max
+        m_raw = np.round(ys * math.sqrt(n)).astype(np.int64)[:, None]
+        m = np.clip(m_raw, 1, n - 1)                         # rows past width n-1 (small n) stay empty
+        # nearest i + j + 1 = 2(n+1)x with the parity of the width: i + j = n + band, j - i = m
+        s0 = np.round((2 * (n + 1) * Xe[None, :] - 1 - m) / 2) * 2 + 1 + m
+        i = ((s0 - 1 - m) // 2).astype(np.int64)
+        m = np.broadcast_to(m, i.shape)
+        ok = (i >= 1) & (i + m <= n) & (2 * i + m > n) & (m_raw <= n - 1)
+        u = np.full(i.shape, np.nan)
+        cusp = np.zeros(i.shape, bool)
+        u[ok] = U[i[ok], m[ok]]
+        cusp[ok] = C[i[ok], m[ok]]
+        fl = np.broadcast_to(flip[None, :], u.shape)
+        fall0 = u <= -1                                      # else u >= 0, or a borderline row certified NOT
+        fall = ok & ~cusp & np.where(fl, ~fall0, fall0)      # the mirror swaps falling and rising
+        rise = ok & ~cusp & ~fall
+        u[fl] = -1 - u[fl]
+        rgb = np.full(u.shape + (3,), _EMPTY, np.float32)
+        rgb[fall] = blues(lv(-u[fall]))[:, :3]
+        rgb[rise] = reds(lv(1 + np.maximum(u[rise], 0)))[:, :3]
+        rgb[cusp] = cuspmap(np.clip(u[cusp] + 1, 0, 1))[:, :3]
+        hb = r1 - r0
+        blk = rgb.reshape(hb, ss, w, ss, 3)
+        cb = cusp.reshape(hb, ss, w, ss)
+        pix = blk.mean(axis=(1, 3))
+        nc = cb.sum(axis=(1, 3))
+        has = nc > 0                                         # any cusp sample: show the cusps' colour
+        pix[has] = (blk * cb[..., None]).sum(axis=(1, 3))[has] / nc[has][:, None]
+        out[r0:r1] = pix
+    return out
+
+
+def export_pair_map(cfg: PairMapConfig, verbose: bool = False, pool=None, tables=None) -> None:
+    """Draw cfg.output_path; tables = pair_u(cfg.n) if already computed (one n, several ranges)."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
-    from matplotlib.colors import LinearSegmentedColormap, Normalize
+    from matplotlib.colors import Normalize
 
     n = cfg.n
-    U, C = pair_u(n, cfg.workers, verbose, pool)
-    ss = max(int(cfg.supersample), 1)
+    U, C = tables if tables is not None else pair_u(n, cfg.workers, verbose, pool)
     fw, fh = int(round(cfg.width_in * cfg.dpi)), int(round(cfg.height_in * cfg.dpi))
     left, bottom = int(round(_MARGIN["left"] * fw)), int(round(_MARGIN["bottom"] * fh))
     w = fw - left - int(round(_MARGIN["right"] * fw))
     h = fh - bottom - int(round(_MARGIN["top"] * fh))
-    xs = cfg.p_min + (np.arange(w * ss) + 0.5) / (w * ss) * (cfg.p_max - cfg.p_min)
-    ys = (np.arange(h * ss) + 0.5) / (h * ss) * cfg.width_max
-    X, Y = np.meshgrid(xs, ys)
-    m_raw = np.round(Y * math.sqrt(n)).astype(np.int64)
-    m = np.clip(m_raw, 1, n - 1)                             # rows past width n-1 (small n) stay blank
-    # nearest i + j + 1 = 2(n+1)x with the parity of the width: i + j = n + band, j - i = m
-    s0 = np.round((2 * (n + 1) * X - 1 - m) / 2) * 2 + 1 + m
-    i = ((s0 - 1 - m) // 2).astype(np.int64)
-    ok = (i >= 1) & (i + m <= n) & (2 * i + m > n) & (m_raw <= n - 1)
-    u = np.full(X.shape, np.nan)
-    cusp = np.zeros(X.shape, bool)
-    u[ok] = U[i[ok], m[ok]]
-    cusp[ok] = C[i[ok], m[ok]]
-    fall = ok & ~cusp & (u <= -1)
-    rise = ok & ~cusp & (u > -1)                             # u >= 0, or a borderline row certified NOT
-    blues, reds = plt.get_cmap("Blues"), plt.get_cmap("Reds")
-    greens = LinearSegmentedColormap.from_list("cusp", ["#f7f73a", "#3bb54a", "#0d5c2e"])
-    lv = lambda v: np.clip(np.log10(np.maximum(v, 1.0)) / cfg.decades, 0, 1)
-    rgb = np.ones(X.shape + (3,))
-    rgb[fall] = blues(0.2 + 0.8 * lv(-u[fall]))[:, :3]
-    rgb[rise] = reds(0.2 + 0.8 * lv(1 + np.maximum(u[rise], 0)))[:, :3]
-    rgb[cusp] = greens(np.clip(-u[cusp], 0, 1))[:, :3]
-    if ss > 1:
-        rgb = rgb.reshape(h, ss, w, ss, 3).mean(axis=(1, 3))
+    rgb = pair_rgb(U, C, n, cfg, w, h)
+    blues, reds, cuspmap = _colour_maps()
 
     fig = plt.figure(figsize=(fw / cfg.dpi, fh / cfg.dpi), dpi=cfg.dpi, facecolor=FIGURE_BACKGROUND)
     ax = fig.add_axes([left / fw, bottom / fh, w / fw, h / fh])
@@ -129,20 +175,19 @@ def export_pair_map(cfg: PairMapConfig, verbose: bool = False, pool=None) -> Non
     for k, (cm, norm, label) in enumerate((
             (blues, Normalize(0, cfg.decades), "falling: log₁₀ |u|"),
             (reds, Normalize(0, cfg.decades), "rising: log₁₀ (1+u)"),
-            (greens, Normalize(-1, 0), "cusp: u"))):
+            (cuspmap, Normalize(-1, 0), "cusp: u  (white: a symmetric V)"))):
         cax = fig.add_axes([x0 + k * (bar_w + gap), bottom / fh, bar_w, h / fh])
-        if k < 2:
-            sm_ = ScalarMappable(norm, LinearSegmentedColormap.from_list(f"c{k}", cm(np.linspace(0.2, 1, 64))))
-        else:
-            sm_ = ScalarMappable(Normalize(-1, 0), LinearSegmentedColormap.from_list("g", greens(np.linspace(1, 0, 64))))
-        cb = fig.colorbar(sm_, cax=cax)
+        cb = fig.colorbar(ScalarMappable(norm, cm), cax=cax)
         cb.set_label(label, fontsize=7)
         cb.ax.tick_params(labelsize=6)
-    fig.suptitle(f"Every tie point of n = {n} in pair space: grid position against width/√n  "
-                 f"(colour: u = S₋/κ, the left slope over the slope jump)\n"
-                 f"blue: E falls through it (u ≤ −1); red: E rises (u ≥ 0); green: a cusp (−1 < u < 0, certified by OBD-core)",
-                 fontsize=10, y=1 - 0.01)
+    mirror = ";  below ½: the mirror image, E(p) = E(1−p)" if cfg.p_min < 0.5 else ""
+    fig.suptitle(f"Every tie point of n = {n} in pair space: grid position against width/√n, "
+                 f"coloured by u = S₋/κ (the left slope over the slope jump)\n"
+                 f"blue: E falls through it (u ≤ −1);  red: E rises (u ≥ 0);  bright: a cusp (−1 < u < 0, "
+                 f"certified by OBD-core)\n"
+                 f"a cusp is white where its V is symmetric (u = −½), aquamarine or yellow where it barely is one{mirror}",
+                 fontsize=9.5, y=1 - 0.008)
     fig.savefig(cfg.output_path, dpi=cfg.dpi, facecolor=FIGURE_BACKGROUND)
     plt.close(fig)
     if verbose:
-        print(f"wrote {cfg.output_path} ({w} x {h} pixels)")
+        print(f"wrote {cfg.output_path} ({w} x {h} pixels, {cfg.supersample}x{cfg.supersample} samples each)")
