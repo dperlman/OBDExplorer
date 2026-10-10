@@ -91,7 +91,7 @@ def export_sawtooth(cfg: SawtoothConfig, verbose: bool = False) -> None:
     a1.scatter(tp[tc & narrow], tE[tc & narrow], s=40, color="#2ca02c", zorder=3,
                label="cusp: a local minimum of E (the kick that carries the slope across zero)")
     a1.scatter(tp[wide], tE[wide], s=60, color="#ff7f0e", marker="D", zorder=3,
-               label="wide cusp (width ≥ 2√n, F3 < 0): a tiny kick just past a maximum, a microscopic dip")
+               label="wide cusp (width ≥ 2√n, F3 < 0): a tiny kick just past a maximum")
     for q in np.flatnonzero(wide):
         a1.annotate(f"pair ({ti[q]}, {tj[q]}), width {(tj[q] - ti[q]) / np.sqrt(n):.2f}√n:\n"
                     f"slope {tsl[q]:+.4f} → {tsr[q]:+.4f}, a minimum too shallow to see here",
@@ -123,8 +123,7 @@ def export_sawtooth(cfg: SawtoothConfig, verbose: bool = False) -> None:
     seg = np.searchsorted(T, p)
     cut = np.flatnonzero(np.diff(seg) != 0) + 1
     a2.plot(np.insert(p, cut, np.nan), np.insert(sl, cut, np.nan), color="0.2", lw=1,
-            label=f"slope of E: continuous between tie points, jumping up at each one (line broken at jumps ≥ "
-                  f"{cfg.jump_min:g}; {int((~big).sum())} smaller ones too small to see)")
+            label=f"slope of E, broken where it jumps (jumps ≥ {cfg.jump_min:g}; {int((~big).sum())} smaller ones are invisible)")
     a2.scatter(tp[fall], tsr[fall], s=9, color="#1f77b4", zorder=3, label="narrow tie point, E falling through it")
     a2.scatter(tp[rise], tsl[rise], s=9, color="#d62728", zorder=3, label="narrow tie point, E rising through it")
     a2.scatter(tp[tc & narrow], np.zeros((tc & narrow).sum()), s=40, color="#2ca02c", zorder=4)
