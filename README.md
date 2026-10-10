@@ -106,6 +106,7 @@ python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n1000-0-1.png --n 1000 
 python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n4000.png --n 4000
 python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n4000-0.5-1.png --n 4000 --p-min 0.5 --p-max 1
 python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n4000-0-1.png --n 4000 --p-min 0 --p-max 1
+python OBDExplorerPlus.py pair-map-movie --range 0.5 0.7 --n-min 7000 --n-max 8000 --frames 101 --spacing linear -o docs/plots/PairMap-emergence-0.5-0.7-n7000-8000.gif -o docs/plots/PairMap-emergence-0.5-0.7-n7000-8000.mp4
 python OBDExplorerPlus.py ij-map -o docs/plots/IJMap-n4000.png --n 4000 --zoom 1880 2720
 python OBDExplorerPlus.py pair-map-movie --range 0 1 --range 0.5 1 --range 0.5 0.7 -o "docs/plots/PairMap-emergence-{range}.gif" -o "docs/plots/PairMap-emergence-{range}.mp4"
 python OBDExplorerPlus.py proximity-map -o docs/plots/N-pCuspGridResidualMap.png --points residual --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
