@@ -95,6 +95,7 @@ python OBDExplorerPlus.py proximity-map -o docs/plots/N-pFirstTieWithinRMap.png 
 python OBDExplorerPlus.py proximity-map -o docs/plots/N-pFirstCuspWithinRMap-0.59-0.61.png --points cusps --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --p-min 0.59 --p-max 0.61 --label-denominator 30
 python OBDExplorerPlus.py proximity-map -o docs/plots/N-pCuspLagMap.png --points lag --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
 python OBDExplorerPlus.py proximity-map -o docs/plots/N-pCuspLagMap-0.59-0.61.png --points lag --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv --p-min 0.59 --p-max 0.61 --label-denominator 30
+python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n100.png --n 100
 python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n1000.png --n 1000
 python OBDExplorerPlus.py pair-map -o docs/plots/PairMap-n4000.png --n 4000
 python OBDExplorerPlus.py proximity-map -o docs/plots/N-pCuspGridResidualMap.png --points residual --cusps-csv ../ordered-binomial-cusps/cusps/cusps_all.csv
