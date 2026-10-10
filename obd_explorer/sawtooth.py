@@ -9,9 +9,9 @@ are exactly the F3 < 0 ones) are the exception: a tie point with a tiny jump lan
 slope has crossed zero going down, past a maximum, and flipping it back (RESEARCH_LOG 2026-10-09).
 
 Three panels: E itself (untilted, so its minima and maxima are where they really are); a close-up of
-one cluster, where E is visibly a polygon with a corner at every tie point; and E's slope, with every
-jump of at least jump_min drawn as a dotted riser (the many smaller ones, from wide pairs with tiny
-masses, are far below what the eye can see).  E and the slope come from obd_core.E_slopes_at on a
+one cluster, where E is visibly a polygon with a corner at every tie point; and E's slope, broken at
+every jump of at least jump_min (the many smaller ones, from wide pairs with tiny masses, are far
+below what the eye can see).  E and the slope come from obd_core.E_slopes_at on a
 dense grid; the tie points and their certified
 cusp verdicts from obd_core.tie_table(n, p_range=...), so any n works.
 """
@@ -32,7 +32,7 @@ class SawtoothConfig:
     p: float = 0.6                      # the window starts half a grid step below this
     steps: float = 3.0                  # window width, in grid steps 1/(2(n+1))
     samples: int = 60001                # dense p grid for E and its slope
-    jump_min: float = 1e-3              # slope jumps at least this big are drawn as risers
+    jump_min: float = 1e-3              # the slope line is broken at jumps at least this big
     zoom_ties: int = 4                  # close-up: this many tie points either side of the first cusp
     width_in: float = 12.0
     height_in: float = 11.0
@@ -118,14 +118,13 @@ def export_sawtooth(cfg: SawtoothConfig, verbose: bool = False) -> None:
                  + (f";\nthe {others} tie points of other columns in this range bend it by at most {other_max:.0e}, "
                     f"far too little to see" if others else ""), fontsize=9)
 
-    # 3. the slope, with every jump of at least jump_min drawn as a dotted riser
+    # 3. the slope, broken at every jump of at least jump_min: a gap in the line is a jump
     T = np.sort(tp[big])
     seg = np.searchsorted(T, p)
     cut = np.flatnonzero(np.diff(seg) != 0) + 1
     a2.plot(np.insert(p, cut, np.nan), np.insert(sl, cut, np.nan), color="0.2", lw=1,
-            label="slope of E between tie points (continuous there)")
-    a2.vlines(tp[big], tsl[big], tsr[big], colors="0.2", linestyles=":", lw=0.8,
-              label=f"jump at a tie point (drawn when ≥ {cfg.jump_min:g}; {int((~big).sum())} smaller ones not drawn)")
+            label=f"slope of E: continuous between tie points, jumping up at each one (line broken at jumps ≥ "
+                  f"{cfg.jump_min:g}; {int((~big).sum())} smaller ones too small to see)")
     a2.scatter(tp[fall], tsr[fall], s=9, color="#1f77b4", zorder=3, label="narrow tie point, E falling through it")
     a2.scatter(tp[rise], tsl[rise], s=9, color="#d62728", zorder=3, label="narrow tie point, E rising through it")
     a2.scatter(tp[tc & narrow], np.zeros((tc & narrow).sum()), s=40, color="#2ca02c", zorder=4)

@@ -1952,7 +1952,7 @@ def main() -> None:
     p_st.add_argument("--p", type=float, default=0.6, help="The window starts half a grid step below this.")
     p_st.add_argument("--steps", type=float, default=3.0, help="Window width in grid steps 1/(2(n+1)).")
     p_st.add_argument("--samples", type=int, default=60001, help="Dense p grid for E and its slope.")
-    p_st.add_argument("--jump-min", type=float, default=1e-3, help="Draw slope jumps at least this big as risers.")
+    p_st.add_argument("--jump-min", type=float, default=1e-3, help="Break the slope line at jumps at least this big.")
     p_st.add_argument("--zoom-ties", type=int, default=4, help="Close-up: tie points either side of the first cusp.")
     p_st.add_argument("--width-in", type=float, default=12.0)
     p_st.add_argument("--height-in", type=float, default=11.0)
