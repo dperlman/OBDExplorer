@@ -99,12 +99,46 @@ def _colour_maps():
     return blues, reds, cusp
 
 
+def sample_colours(U: np.ndarray, C: np.ndarray, i: np.ndarray, m: np.ndarray, ok: np.ndarray,
+                   flip: np.ndarray, decades: float, maps=None) -> tuple[np.ndarray, np.ndarray]:
+    """(rgb, cusp) for the sample points showing tie point (i, i+m) of the p* > 1/2 half (where ok),
+    drawn as its own mirror image where flip (u -> -1 - u: falling <-> rising); elsewhere _EMPTY."""
+    blues, reds, cuspmap = maps or _colour_maps()
+    lv = lambda v: np.clip(np.log10(np.maximum(v, 1.0)) / decades, 0, 1)
+    u = np.full(i.shape, np.nan)
+    cusp = np.zeros(i.shape, bool)
+    u[ok] = U[i[ok], m[ok]]
+    cusp[ok] = C[i[ok], m[ok]]
+    fall0 = u <= -1                                          # else u >= 0, or a borderline row certified NOT
+    fall = ok & ~cusp & np.where(flip, ~fall0, fall0)        # the mirror swaps falling and rising
+    rise = ok & ~cusp & ~fall
+    u[flip] = -1 - u[flip]
+    rgb = np.full(u.shape + (3,), _EMPTY, np.float32)
+    rgb[fall] = blues(lv(-u[fall]))[:, :3]
+    rgb[rise] = reds(lv(1 + np.maximum(u[rise], 0)))[:, :3]
+    rgb[cusp] = cuspmap(np.clip(u[cusp] + 1, 0, 1))[:, :3]
+    return rgb, cusp
+
+
+def downsample(rgb: np.ndarray, cusp: np.ndarray, ss: int) -> np.ndarray:
+    """Average ss x ss blocks of samples into pixels; a pixel with any cusp sample shows the cusps' colour."""
+    if ss == 1:
+        return rgb
+    hb, wb = rgb.shape[0] // ss, rgb.shape[1] // ss
+    blk = rgb.reshape(hb, ss, wb, ss, 3)
+    cb = cusp.reshape(hb, ss, wb, ss)
+    pix = blk.mean(axis=(1, 3))
+    nc = cb.sum(axis=(1, 3))
+    has = nc > 0
+    pix[has] = (blk * cb[..., None]).sum(axis=(1, 3))[has] / nc[has][:, None]
+    return pix
+
+
 def pair_rgb(U: np.ndarray, C: np.ndarray, n: int, cfg: PairMapConfig, w: int, h: int,
              chunk_rows: int = 64) -> np.ndarray:
     """The (h, w, 3) image, row 0 at width 0, computed a band of rows at a time."""
-    blues, reds, cuspmap = _colour_maps()
+    maps = _colour_maps()
     ss = max(int(cfg.supersample), 1)
-    lv = lambda v: np.clip(np.log10(np.maximum(v, 1.0)) / cfg.decades, 0, 1)
     X = cfg.p_min + (np.arange(w * ss) + 0.5) / (w * ss) * (cfg.p_max - cfg.p_min)
     flip = X < 0.5                                           # mirror half: E(p) = E(1-p)
     Xe = np.where(flip, 1 - X, X)
@@ -119,27 +153,8 @@ def pair_rgb(U: np.ndarray, C: np.ndarray, n: int, cfg: PairMapConfig, w: int, h
         i = ((s0 - 1 - m) // 2).astype(np.int64)
         m = np.broadcast_to(m, i.shape)
         ok = (i >= 1) & (i + m <= n) & (2 * i + m > n) & (m_raw <= n - 1)
-        u = np.full(i.shape, np.nan)
-        cusp = np.zeros(i.shape, bool)
-        u[ok] = U[i[ok], m[ok]]
-        cusp[ok] = C[i[ok], m[ok]]
-        fl = np.broadcast_to(flip[None, :], u.shape)
-        fall0 = u <= -1                                      # else u >= 0, or a borderline row certified NOT
-        fall = ok & ~cusp & np.where(fl, ~fall0, fall0)      # the mirror swaps falling and rising
-        rise = ok & ~cusp & ~fall
-        u[fl] = -1 - u[fl]
-        rgb = np.full(u.shape + (3,), _EMPTY, np.float32)
-        rgb[fall] = blues(lv(-u[fall]))[:, :3]
-        rgb[rise] = reds(lv(1 + np.maximum(u[rise], 0)))[:, :3]
-        rgb[cusp] = cuspmap(np.clip(u[cusp] + 1, 0, 1))[:, :3]
-        hb = r1 - r0
-        blk = rgb.reshape(hb, ss, w, ss, 3)
-        cb = cusp.reshape(hb, ss, w, ss)
-        pix = blk.mean(axis=(1, 3))
-        nc = cb.sum(axis=(1, 3))
-        has = nc > 0                                         # any cusp sample: show the cusps' colour
-        pix[has] = (blk * cb[..., None]).sum(axis=(1, 3))[has] / nc[has][:, None]
-        out[r0:r1] = pix
+        rgb, cusp = sample_colours(U, C, i, m, ok, np.broadcast_to(flip[None, :], i.shape), cfg.decades, maps)
+        out[r0:r1] = downsample(rgb, cusp, ss)
     return out
 
 
