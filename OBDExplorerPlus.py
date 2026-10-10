@@ -1386,6 +1386,7 @@ def _run_pair_map(args: argparse.Namespace) -> None:
         width_max=args.width_max,
         decades=args.decades,
         workers=args.workers,
+        supersample=args.supersample,
         width_in=args.width_in,
         height_in=args.height_in,
         dpi=args.dpi,
@@ -1394,6 +1395,26 @@ def _run_pair_map(args: argparse.Namespace) -> None:
     _ensure_output_parent_dir(cfg.output_path)
     export_pair_map(cfg, verbose=True)
     stamp_export(cfg.output_path, cfg, args)
+
+
+def _run_pair_map_movie(args: argparse.Namespace) -> None:
+    from obd_explorer.pair_map_movie import PairMapMovieConfig, export_pair_map_movie
+
+    cfg = PairMapMovieConfig(
+        n_min=args.n_min,
+        n_max=args.n_max,
+        frames=args.frames,
+        fps=args.fps,
+        hold_end=args.hold_end,
+        ranges=tuple(tuple(r) for r in (args.range or [(0.5, 0.7)])),
+        width_max=args.width_max,
+        supersample=args.supersample,
+        workers=args.workers,
+        gif_width=args.gif_width,
+        frames_dir=args.frames_dir,
+        outputs=tuple(args.output),
+    )
+    export_pair_map_movie(cfg, args, verbose=True)
 
 
 def _run_sawtooth(args: argparse.Namespace) -> None:
@@ -1939,9 +1960,29 @@ def main() -> None:
     p_pr.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
     p_pr.add_argument("--decades", type=float, default=6.0, help="Blue/red shading range in log10 |u|.")
     p_pr.add_argument("--workers", type=int, default=8)
+    p_pr.add_argument("--supersample", type=int, default=2, help="Average k x k samples per pixel (cusps take priority).")
     p_pr.add_argument("--width-in", type=float, default=12.0)
     p_pr.add_argument("--height-in", type=float, default=7.0)
     p_pr.add_argument("--dpi", type=int, default=600)
+
+    p_pmm = sub.add_parser(
+        "pair-map-movie",
+        help="The pair-space picture at log-spaced n, as a looping animation (.gif and/or .mp4).",
+    )
+    p_pmm.add_argument("-o", "--output", action="append", required=True,
+                       help="Output .gif or .mp4 (repeatable); {range} in the name becomes e.g. 0.5-1.")
+    p_pmm.add_argument("--n-min", type=int, default=50)
+    p_pmm.add_argument("--n-max", type=int, default=8000)
+    p_pmm.add_argument("--frames", type=int, default=100, help="Number of log-spaced n values.")
+    p_pmm.add_argument("--fps", type=float, default=10.0)
+    p_pmm.add_argument("--hold-end", type=float, default=2.0, help="Seconds the last frame stays up before looping.")
+    p_pmm.add_argument("--range", type=float, nargs=2, action="append", metavar=("P_MIN", "P_MAX"),
+                       help="A p range to animate (repeatable; default 0.5 0.7). With several, put {range} in -o.")
+    p_pmm.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
+    p_pmm.add_argument("--supersample", type=int, default=3, help="Average k x k samples per pixel.")
+    p_pmm.add_argument("--workers", type=int, default=8)
+    p_pmm.add_argument("--gif-width", type=int, default=1280, help="GIF width in pixels.")
+    p_pmm.add_argument("--frames-dir", default="plots/pair-map-frames", help="Cache of rendered frames.")
 
     p_st = sub.add_parser(
         "sawtooth",
@@ -1978,6 +2019,8 @@ def main() -> None:
         _run_proximity_map(args)
     elif args.cmd == "pair-map":
         _run_pair_map(args)
+    elif args.cmd == "pair-map-movie":
+        _run_pair_map_movie(args)
     elif args.cmd == "sawtooth":
         _run_sawtooth(args)
 
