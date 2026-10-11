@@ -61,20 +61,35 @@ _CUSP_COLOURS = ("#7FFFD4", "#FFFFFF", "#FFEB3B")   # u = -1, -1/2, 0: L* 92, 10
 _EMPTY = 0.5                            # grey, L* 53
 
 
-def pair_u(n: int, workers: int = 8, verbose: bool = False, pool=None) -> tuple[np.ndarray, np.ndarray]:
-    """(U, C): U[i, m] = u = S_-/kappa of the tie point (i, i+m), C[i, m] its certified cusp flag."""
+def full_tie_table(n: int, columns=None, workers: int = 8, pool=None) -> tuple[dict, str]:
+    """(table, source): obd_core.tie_table(n), read from the shared store (obd_core.store, ~/obd-data)
+    when it holds n, else computed and saved there.  Falls back to computing without saving when the
+    installed OBD-core has no store."""
     from multiprocessing import Pool
 
     import obd_core
 
-    t0 = time.time()
-    if pool is not None:
-        tab = obd_core.tie_table(n, workers=workers, pool=pool)
-    elif workers > 1:
-        with Pool(workers) as pool:
-            tab = obd_core.tie_table(n, workers=workers, pool=pool)
+    try:
+        from obd_core import store
+        st = store.Store()
+    except ImportError:
+        st = None
+    if st is not None and st.covered("ties", n) == [[0.5, 1.0]]:
+        return st.ties(n, columns=columns), "store"           # a read: no worker pool needed
+    get = (lambda p: st.ties(n, columns=columns, workers=workers, pool=p)) if st is not None else \
+          (lambda p: obd_core.tie_table(n, workers=workers, pool=p))
+    if pool is not None or workers <= 1:
+        tab = get(pool)
     else:
-        tab = obd_core.tie_table(n)
+        with Pool(workers) as p:
+            tab = get(p)
+    return tab, ("computed and saved" if st is not None else "computed")
+
+
+def pair_u(n: int, workers: int = 8, verbose: bool = False, pool=None) -> tuple[np.ndarray, np.ndarray]:
+    """(U, C): U[i, m] = u = S_-/kappa of the tie point (i, i+m), C[i, m] its certified cusp flag."""
+    t0 = time.time()
+    tab, source = full_tie_table(n, ["i", "j", "S_minus", "ln_fi", "is_cusp"], workers, pool)
     s = slice(1, None)                                       # row 0 is the axis p = 1/2
     i = tab["i"][s].astype(np.int64)
     m = tab["j"][s].astype(np.int64) - i
@@ -85,7 +100,7 @@ def pair_u(n: int, workers: int = 8, verbose: bool = False, pool=None) -> tuple[
     C = np.zeros((n + 1, n + 1), bool)
     C[i, m] = tab["is_cusp"][s]
     if verbose:
-        print(f"n = {n}: {i.size:,} tie points, {int(C.sum())} cusps, {time.time() - t0:.0f}s")
+        print(f"n = {n}: {i.size:,} tie points, {int(C.sum())} cusps, {source}, {time.time() - t0:.1f}s")
     return U, C
 
 
