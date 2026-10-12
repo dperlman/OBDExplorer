@@ -158,7 +158,13 @@ Columns: `n` (int16), `tie_index` (int32; signed, relative to the center tie `p 
 
 ## Pathway 4: window cache
 
-Code path: `obd_explorer/cusp_proximity.py`, `WindowCache`, written by `extend_first_n` when
+**Retired 2026-10-11.** `cusp-proximity --extend-to` now searches through the shared store
+(`Store.cusps` and `Store.positions` with a list of p windows), which records what it has searched
+the same way. The directories below are no longer read or written; `data/tie_windows/` was copied
+into the store as tie positions, and `data/cusp_windows/` (which kept only i, j and p*) is
+recomputed through the store the next time a plot needs it. The description is kept for the record.
+
+Code path (until 2026-10-11): `obd_explorer/cusp_proximity.py`, `WindowCache`, written by `extend_first_n` when
 `OBDExplorerPlus.py cusp-proximity --extend-to N` searches past the cusp tables with OBD-core's
 windowed tie tables (`tie_table(n, p_range=[windows])`, obd-core >= 0.6.0).
 

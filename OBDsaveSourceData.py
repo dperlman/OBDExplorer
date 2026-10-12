@@ -187,8 +187,12 @@ def _tie_table_for_n(n: int) -> tuple[dict[str, np.ndarray], dict[str, int]]:
     Also returns ``stats``: ``n_checked`` (tie points that needed interval or exact arithmetic) and
     ``n_unresolved``.
     """
+    return _old_tie_format(n, obd_core.tie_table(int(n), both_halves=True))
+
+
+def _old_tie_format(n: int, t: dict) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+    """``tie_table(n, both_halves=True)`` (or the store's equivalent) in this module's column format."""
     ni = int(n)
-    t = obd_core.tie_table(ni, both_halves=True)
     i = t["i"].astype(np.int16)
     j = t["j"].astype(np.int16)
     center = (t["i"] == 0) & (t["j"] == ni)
@@ -365,8 +369,21 @@ def _atomic_json_dump(path: str, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def _store_tie_ns() -> list[int]:
+    """The n whose full tie tables the shared store (obd_core.store, ~/obd-data) holds."""
+    from obd_core import store
+
+    st = store.Store()
+    return [n for n in st.ns("ties") if st.covered("ties", n) == [[0.5, 1.0]]]
+
+
 def load_tie_manifest(path: str = DEFAULT_TIE_OUTPUT) -> dict:
-    """The tie-point manifest (JSON). Raises on anything but the current format."""
+    """The tie-point manifest. For the default path, a manifest of the shared store's full tie tables
+    (``n_entries`` keyed by n, ``source`` = "obd_core.store"); for any other path, the JSON manifest of
+    an old ``data/tie_points``-style directory. Raises on anything but the current format."""
+    if path == DEFAULT_TIE_OUTPUT:
+        return {"format": TIE_FORMAT, "source": "obd_core.store",
+                "n_entries": {str(n): {"n": n} for n in _store_tie_ns()}}
     if path.endswith(".pkl"):
         raise ValueError(
             f"{path!r} is a pickle tie manifest from before 2026-10-06; the tie points now live in "
@@ -390,17 +407,35 @@ def iter_tie_tables(
 ):
     """Yield ``(n, table)`` for each requested ``n``, one n at a time.
 
+    With the default ``path`` the tables come from the shared store (every n it holds when
+    ``n_list`` is None; any other n is computed and saved there). Any other ``path`` reads an old
+    ``data/tie_points``-style directory.
+
     ``table`` maps column name -> numpy array, rows sorted by ``p`` (see ``_tie_table_for_n`` for the
     columns). ``columns`` restricts what is read (Parquet reads only those columns). Missing ``n``
     raise when ``require_all``, else are skipped. ``progress=N`` prints timing every N values of n.
     """
-    manifest = load_tie_manifest(path)
-    n_entries = manifest.get("n_entries", {})
-    target_ns = sorted(int(k) for k in n_entries) if n_list is None else [int(n) for n in n_list]
     if columns is not None:
         unknown = [c for c in columns if c not in TIE_COLUMNS]
         if unknown:
             raise ValueError(f"Unknown tie columns {unknown}; available: {TIE_COLUMNS}")
+    if path == DEFAULT_TIE_OUTPUT:
+        # the shared store: read where it holds n, else computed with tie_table and saved there
+        from obd_core import store
+
+        st = store.Store()
+        target_ns = _store_tie_ns() if n_list is None else [int(n) for n in n_list]
+        t0 = time.perf_counter()
+        for step, n in enumerate(target_ns, start=1):
+            table, _ = _old_tie_format(n, st.ties(n, both_halves=True))
+            yield n, (table if columns is None else {c: table[c] for c in columns})
+            if progress and (step % int(progress) == 0 or step == len(target_ns)):
+                print(f"[ties] n={n} step {step}/{len(target_ns)} elapsed {time.perf_counter() - t0:.2f}s",
+                      file=sys.stderr)
+        return
+    manifest = load_tie_manifest(path)
+    n_entries = manifest.get("n_entries", {})
+    target_ns = sorted(int(k) for k in n_entries) if n_list is None else [int(n) for n in n_list]
     every = int(progress) if progress else 0
     total = len(target_ns)
     t0 = time.perf_counter()
