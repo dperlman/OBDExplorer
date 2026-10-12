@@ -1335,14 +1335,11 @@ def _run_cusp_proximity_export(args: argparse.Namespace) -> None:
         width_in=args.width_in,
         height_in=args.height_in,
         dpi=args.dpi,
-        cusp_table=args.cusp_table,
         cusps_csv=args.cusps_csv,
         extend_to=args.extend_to,
         extend_p_max=args.extend_p_max if args.extend_p_max is not None else (1.0 if ties else 0.6525),
         min_pair_mass=args.min_pair_mass,
         workers=args.workers,
-        window_cache=None if args.no_window_cache else (
-            args.window_cache or os.path.join("data", "tie_windows" if ties else "cusp_windows")),
         output_path=_resolved_export_output_path(args.output, "png"),
     )
     _ensure_output_parent_dir(cfg.output_path)
@@ -1367,7 +1364,6 @@ def _run_proximity_map(args: argparse.Namespace) -> None:
         width_in=args.width_in,
         height_in=args.height_in,
         dpi=args.dpi,
-        cusp_table=args.cusp_table,
         cusps_csv=args.cusps_csv,
         output_path=_resolved_export_output_path(args.output, "png"),
     )
@@ -1903,7 +1899,6 @@ def main() -> None:
     p_cp.add_argument("--log-n", action="store_true", default=True, help="Log scale for n (default).")
     p_cp.add_argument("--linear-n", action="store_false", dest="log_n", help="Linear scale for n.")
     p_cp.add_argument("--marker-size", type=float, default=2.0, help="Point area in points^2.")
-    p_cp.add_argument("--cusp-table", default=None, help="Cusp table (Parquet) path.")
     p_cp.add_argument(
         "--cusps-csv",
         default=None,
@@ -1929,13 +1924,6 @@ def main() -> None:
         help="With --extend-to: skip pairs whose mass f(i) is below this (e.g. 1e-20). Faster; not proved complete.",
     )
     p_cp.add_argument("--workers", type=int, default=8, help="Processes for --extend-to.")
-    p_cp.add_argument(
-        "--window-cache",
-        default=None,
-        help="Where --extend-to keeps what it has searched and found, so later runs reuse it "
-        "(default data/cusp_windows, or data/tie_windows with --points ties).",
-    )
-    p_cp.add_argument("--no-window-cache", action="store_true", help="Neither read nor write the window cache.")
     p_cp.add_argument("--width-in", type=float, default=12.0)
     p_cp.add_argument("--height-in", type=float, default=7.0)
     p_cp.add_argument("--dpi", type=int, default=300)
@@ -1962,7 +1950,6 @@ def main() -> None:
     p_pm.add_argument("--n-max", type=int, default=None, help="Use only n <= this (default: all complete data).")
     p_pm.add_argument("--label-denominator", type=int, default=None, help="Mark fractions with b <= this (default 12 cusps, 8 ties).")
     p_pm.add_argument("--colormap", default="magma")
-    p_pm.add_argument("--cusp-table", default=None, help="Cusp table (Parquet) path.")
     p_pm.add_argument("--cusps-csv", default=None, help="ordered-binomial-cusps' cusps/cusps_all.csv (n <= 5000).")
     p_pm.add_argument("--width-in", type=float, default=12.0)
     p_pm.add_argument("--height-in", type=float, default=7.0)

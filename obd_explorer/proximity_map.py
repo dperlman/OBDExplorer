@@ -56,7 +56,6 @@ class ProximityMapConfig:
     width_in: float = 12.0
     height_in: float = 7.0
     dpi: int = 600
-    cusp_table: str | None = None
     cusps_csv: str | None = None
     output_path: str = "plots/N-pFirstWithinRMap.png"
 
@@ -83,16 +82,18 @@ def _point_sets(cfg):
             yield n, k / d
         return
     if cfg.points == "ties":
-        from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, iter_tie_tables, load_tie_manifest
+        from obd_core import store
 
-        ns = sorted(int(k) for k in load_tie_manifest(DEFAULT_TIE_OUTPUT)["n_entries"])
-        ns = [n for n in ns if cfg.n_max is None or n <= cfg.n_max]
-        for n, tab in iter_tie_tables(DEFAULT_TIE_OUTPUT, n_list=ns, columns=["p"]):
-            yield n, tab["p"]
+        st = store.Store()                     # the full tie tables it holds, n = 2, 3, ... unbroken
+        n = 2
+        while (cfg.n_max is None or n <= cfg.n_max) and st.covered("ties", n) == [[0.5, 1.0]]:
+            p = st.ties(n, columns=["pstar"])["pstar"]       # p* >= 1/2, the axis included
+            yield n, np.sort(np.concatenate([p, 1.0 - p[p > 0.5]]))
+            n += 1
         return
     from obd_explorer.cusp_proximity import CuspProximityExportConfig, load_cusps
 
-    cn, cp, _ = load_cusps(CuspProximityExportConfig(cusp_table=cfg.cusp_table, cusps_csv=cfg.cusps_csv,
+    cn, cp, _ = load_cusps(CuspProximityExportConfig(cusps_csv=cfg.cusps_csv,
                                                      n_max=cfg.n_max))
     starts = np.r_[0, np.flatnonzero(np.diff(cn)) + 1]
     ends = np.r_[starts[1:], cn.size]
