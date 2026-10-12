@@ -34,9 +34,12 @@ reads what is stored and computes and saves only what is missing, so a plot redo
 - The store was filled on 2026-10-11 by OBD-core's `tools/build_store.py`, which compared every
   older copy on the way: `data/tie_points/` below, the cusps repo's `data/ties/` and its cusp CSVs.
   The comparisons are in `~/obd-data/verification/`.
-- The pathways below still work and are kept until the plots that use them read the store instead:
-  `data/tie_points/` and `data/tie_cusps.parquet` (n ≤ 1000) are superseded by the store; the window
-  caches (pathway 4) are next to move; the graph data (pathway 2) stays here as a render-side cache.
+- Everything reads the store now. `data/tie_points/` (pathway 1) and the window caches (pathway 4)
+  were retired on 2026-10-12, after the store was checked against them bit for bit; their sections
+  below are kept for the record. The tie loaders (`load_tie_manifest`, `iter_tie_tables`,
+  `load_tie_tables`) serve the store's tables in the pathway-1 column format. `data/tie_cusps.parquet`
+  (pathway 3) stays as a derived cache built from the store, and the graph data (pathway 2) as a
+  render-side cache.
 
 ## High-level data outputs
 

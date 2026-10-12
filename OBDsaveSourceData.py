@@ -382,8 +382,17 @@ def load_tie_manifest(path: str = DEFAULT_TIE_OUTPUT) -> dict:
     (``n_entries`` keyed by n, ``source`` = "obd_core.store"); for any other path, the JSON manifest of
     an old ``data/tie_points``-style directory. Raises on anything but the current format."""
     if path == DEFAULT_TIE_OUTPUT:
-        return {"format": TIE_FORMAT, "source": "obd_core.store",
-                "n_entries": {str(n): {"n": n} for n in _store_tie_ns()}}
+        from obd_core import store
+
+        st = store.Store()
+        entries = {}
+        for n in _store_tie_ns():
+            # the store keeps p* >= 1/2 (the axis row included); both halves hold 2 rows - 1
+            rows = sum(p["rows"] for p in st.coverage("ties", n)["parts"])
+            cusp = st.cusps(n, columns=["pstar"])["pstar"]
+            entries[str(n)] = {"n": n, "tie_points": 2 * rows - 1, "cusps": 2 * cusp.size - 1,
+                               "max_cusp_p": float(cusp.max())}
+        return {"format": TIE_FORMAT, "source": "obd_core.store", "n_entries": entries}
     if path.endswith(".pkl"):
         raise ValueError(
             f"{path!r} is a pickle tie manifest from before 2026-10-06; the tie points now live in "
@@ -662,6 +671,10 @@ def save_tie_points(
 ) -> None:
     """Compute every tie point for each n and save one Parquet table per n.
 
+    With the default ``path`` the tables go to the shared store instead (obd_core.store,
+    ~/obd-data), which skips the n it already holds; the rest of this docstring describes the old
+    ``data/tie_points`` layout, still written for any other path.
+
     Every new table is checked on all rows against proved invariants before it is written (a
     failure is printed, logged and recorded in the manifest as ``invariants_ok: false``).  With
     ``spot_check``, a few of the new n are then read back from disk and sampled against the rigorous
@@ -676,6 +689,22 @@ def save_tie_points(
     ``n_entries[str(n)]`` with ``n``, ``path`` (relative to the manifest), ``tie_points``,
     ``cusps``, ``max_cusp_p``, ``n_checked``, ``n_unresolved``, ``invariants_ok``, ``updated_at``.
     """
+    if path == DEFAULT_TIE_OUTPUT:
+        from multiprocessing import Pool
+
+        from obd_core import store
+
+        st = store.Store()
+        ns = sorted(n_list) if n_list is not None else list(range(2, 1001))
+        todo = [n for n in ns if st.covered("ties", n) != [[0.5, 1.0]]]
+        print(f"save_tie_points: {len(ns) - len(todo)} of {len(ns)} n already in the store ({st.root}); computing {len(todo)}")
+        with Pool(workers) as pool:
+            for n in todo:
+                st.ties(n, workers=workers, pool=pool)
+                if verbose:
+                    print(f"  n = {n} saved", flush=True)
+        return
+
     ns = n_list if n_list is not None else N_LIST
     _ensure_parent_dir(path)
     os.makedirs(shards_dir, exist_ok=True)
@@ -851,6 +880,9 @@ def check_tie_points(
 ) -> bool:
     """Check the tie tables on disk; returns True if everything passes.
 
+    With the default ``path``: Store.check on the shared store's tie tables (``n_list``, or a spread
+    of ``sample_ns`` of them), recomputed and compared bit for bit, and logged in its STORE.json.
+
     * ``invariants``: every row of every requested n against bounds proved from the definitions
       (``obd_core.reference.check_invariants``): fast, and catches a single corrupt row.
     * ``sample`` rows (plus the first and last) of ``sample_ns`` values of n spread over the range,
@@ -858,6 +890,15 @@ def check_tie_points(
       interval-arithmetic values, so the stored doubles must agree to ``expected_double_error(n)``
       and every sampled cusp verdict must match.
     """
+    if path == DEFAULT_TIE_OUTPUT:
+        from obd_core import store
+
+        st = store.Store()
+        ns = n_list if n_list is not None else _spread(_store_tie_ns(), sample_ns)
+        r = st.check("ties", ns=ns, reference_sample=sample)
+        print(f"check_tie_points: {r['n_checked']} n checked in the store, failures: {r['failures'] or 'none'}")
+        return not r["failures"]
+
     manifest = load_tie_manifest(path)
     all_ns = sorted(int(k) for k in manifest["n_entries"])
     ns = all_ns if n_list is None else [int(n) for n in n_list]
