@@ -348,10 +348,13 @@ def export_cusp_proximity(cfg: CuspProximityExportConfig, verbose: bool = False)
     ties = cfg.points == "ties"
     word = "tie point" if ties else "cusp"
     if ties:
-        from OBDsaveSourceData import DEFAULT_TIE_OUTPUT, load_tie_manifest
+        from obd_core import store
 
-        avail = [int(k) for k in load_tie_manifest(DEFAULT_TIE_OUTPUT)["n_entries"]]
-        n_table = n_data = max(k for k in avail if cfg.n_max is None or k <= cfg.n_max)
+        st = store.Store()                     # the unbroken run of full tie tables from n = 2
+        n_data = 1
+        while (cfg.n_max is None or n_data < cfg.n_max) and st.covered("ties", n_data + 1) == [[0.5, 1.0]]:
+            n_data += 1
+        n_table = n_data
     else:
         cusp_n, cusp_p, n_table = load_cusps(cfg)
         n_data = int(cusp_n.max())
