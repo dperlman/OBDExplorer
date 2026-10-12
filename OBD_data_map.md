@@ -4,6 +4,7 @@ This document is a reference for the data files, data structures and dtypes writ
 
 ## Quick Index
 
+- [The shared store](#the-shared-store)
 - [High-level data outputs](#high-level-data-outputs)
 - [Pathway 1: tie tables](#pathway-1-tie-tables)
   - [Tie manifest](#tie-manifest)
@@ -19,6 +20,23 @@ This document is a reference for the data files, data structures and dtypes writ
 ### Note on Quick Index links (Cursor / VS Code)
 
 The built-in Markdown preview (same stack Cursor inherits) assigns each heading an `id` using the **GitHub-style slug** in [`slugify.ts`](https://github.com/microsoft/vscode/blob/main/extensions/markdown-language-features/src/slugify.ts): lowercase, strip punctuation with a large regex (same idea as the [`github-slugger`](https://github.com/Flet/github-slugger) package), then replace whitespace with `-`. Characters such as `:` and `+` are **removed** (not turned into `-`), so e.g. `Pathway 1: tie tables` becomes `pathway-1-tie-tables`. The fragments in the index above are written to match that algorithm.
+
+## The shared store
+
+Certified tie tables and cusp tables now live in one store shared by all three repositories:
+`~/obd-data` (or `$OBD_DATA`), written and read by OBD-core's `obd_core.store` (its README has the
+API; `~/obd-data/README.md` has the format). Every value comes from `obd_core.tie_table`; a request
+reads what is stored and computes and saves only what is missing, so a plot redone is a read.
+
+- `pair-map`, `ij-map` and `pair-map-movie` read full tie tables through it
+  (`obd_explorer.pair_map.full_tie_table`). With an OBD-core that has no store they compute as
+  before.
+- The store was filled on 2026-10-11 by OBD-core's `tools/build_store.py`, which compared every
+  older copy on the way: `data/tie_points/` below, the cusps repo's `data/ties/` and its cusp CSVs.
+  The comparisons are in `~/obd-data/verification/`.
+- The pathways below still work and are kept until the plots that use them read the store instead:
+  `data/tie_points/` and `data/tie_cusps.parquet` (n ≤ 1000) are superseded by the store; the window
+  caches (pathway 4) are next to move; the graph data (pathway 2) stays here as a render-side cache.
 
 ## High-level data outputs
 
