@@ -1424,6 +1424,7 @@ def _run_pair_map_movie(args: argparse.Namespace) -> None:
         hold_end=args.hold_end,
         ranges=tuple(tuple(r) for r in (args.range or [(0.5, 0.7)])),
         width_max=args.width_max,
+        width_scale=args.width_scale,
         supersample=args.supersample,
         workers=args.workers,
         gif_width=args.gif_width,
@@ -2002,6 +2003,8 @@ def main() -> None:
     p_pmm.add_argument("--range", type=float, nargs=2, action="append", metavar=("P_MIN", "P_MAX"),
                        help="A p range to animate (repeatable; default 0.5 0.7). With several, put {range} in -o.")
     p_pmm.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
+    p_pmm.add_argument("--width-scale", choices=("linear", "sqrt", "log"), default="linear",
+                       help="Vertical axis scale (log runs from j - i = 1).")
     p_pmm.add_argument("--supersample", type=int, default=3, help="Average k x k samples per pixel.")
     p_pmm.add_argument("--workers", type=int, default=8)
     p_pmm.add_argument("--gif-width", type=int, default=1280, help="GIF width in pixels.")
