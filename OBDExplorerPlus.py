@@ -1380,6 +1380,7 @@ def _run_pair_map(args: argparse.Namespace) -> None:
         p_min=args.p_min,
         p_max=args.p_max,
         width_max=args.width_max,
+        width_scale=args.width_scale,
         decades=args.decades,
         workers=args.workers,
         supersample=args.supersample,
@@ -1964,6 +1965,8 @@ def main() -> None:
     p_pr.add_argument("--p-min", type=float, default=0.5)
     p_pr.add_argument("--p-max", type=float, default=0.7)
     p_pr.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
+    p_pr.add_argument("--width-scale", choices=("linear", "sqrt", "log"), default="linear",
+                      help="Vertical axis scale (log runs from j - i = 1).")
     p_pr.add_argument("--decades", type=float, default=6.0, help="Blue/red shading range in log10 |u|.")
     p_pr.add_argument("--workers", type=int, default=8)
     p_pr.add_argument("--supersample", type=int, default=2, help="Average k x k samples per pixel (cusps take priority).")
