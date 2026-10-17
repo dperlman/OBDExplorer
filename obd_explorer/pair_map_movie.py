@@ -1,7 +1,10 @@
 """The pair-space picture (pair_map) at log-spaced n, stitched into a looping animation.
 
 Frame k shows n = round(n_min * (n_max/n_min)^(k/(frames-1))) (spacing "log"; "linear" spaces n
-evenly instead, e.g. every 10th n), with the same axes throughout
+evenly instead, e.g. every 10th n).  With every_n_until = N1 the frame count follows from the
+spacing instead: every n from n_min to N1, then n grows by the factor 1 + 1/N1 per frame, so no two
+frames share an n and the step is 1 on both sides of N1 (the pace never jumps).  The same axes are
+used throughout
 (grid position across, width/sqrt(n) up, on a linear, square-root or log scale), so the structure
 stays in place while it sharpens.  Frames
 are PNGs cached in frames_dir under a hash of the drawing settings: a rerun re-encodes without
@@ -19,6 +22,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import subprocess
 import time
@@ -34,6 +38,7 @@ class PairMapMovieConfig:
     n_max: int = 8000
     frames: int = 100
     spacing: str = "log"                # "log" or "linear" in n
+    every_n_until: int = 0              # > 0: every n up to this, then log steps of 1 + 1/this (frames unused)
     fps: float = 10.0
     hold_end: float = 2.0               # seconds the last frame stays up before the loop restarts
     ranges: tuple[tuple[float, float], ...] = ((0.5, 0.7),)   # (p_min, p_max) per animation
@@ -51,6 +56,13 @@ class PairMapMovieConfig:
 
 
 def movie_n_values(cfg: PairMapMovieConfig) -> list[int]:
+    if cfg.every_n_until:
+        n1 = cfg.every_n_until
+        if not cfg.n_min <= n1 < cfg.n_max:
+            raise ValueError(f"every_n_until {n1} must be in [n_min, n_max)")
+        k = math.ceil(math.log(cfg.n_max / n1) / math.log(1 + 1 / n1))
+        geo = np.round(n1 * (cfg.n_max / n1) ** (np.arange(k + 1) / k)).astype(int)
+        return list(range(cfg.n_min, n1)) + [int(v) for v in geo]
     space = {"log": np.geomspace, "linear": np.linspace}[cfg.spacing]
     n = np.round(space(cfg.n_min, cfg.n_max, cfg.frames)).astype(int)
     return sorted(set(int(v) for v in n))
