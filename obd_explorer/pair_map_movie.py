@@ -2,7 +2,8 @@
 
 Frame k shows n = round(n_min * (n_max/n_min)^(k/(frames-1))) (spacing "log"; "linear" spaces n
 evenly instead, e.g. every 10th n), with the same axes throughout
-(grid position across, width/sqrt(n) up), so the structure stays in place while it sharpens.  Frames
+(grid position across, width/sqrt(n) up, on a linear, square-root or log scale), so the structure
+stays in place while it sharpens.  Frames
 are PNGs cached in frames_dir under a hash of the drawing settings: a rerun re-encodes without
 recomputing, and changing n_max or the frame count only computes the new n.  Several p ranges can be
 made in one run: each n's tie table is computed once and drawn in every range, and an output path
@@ -37,6 +38,7 @@ class PairMapMovieConfig:
     hold_end: float = 2.0               # seconds the last frame stays up before the loop restarts
     ranges: tuple[tuple[float, float], ...] = ((0.5, 0.7),)   # (p_min, p_max) per animation
     width_max: float = 8.0
+    width_scale: str = "linear"         # "linear", "sqrt" or "log" (pair_map)
     decades: float = 6.0
     supersample: int = 3
     workers: int = 8
@@ -60,7 +62,8 @@ def range_label(r: tuple[float, float]) -> str:
 
 def _frame_dir(cfg: PairMapMovieConfig, r: tuple[float, float]) -> str:
     keys = ("width_max", "decades", "supersample", "width_in", "height_in", "dpi")
-    tag = json.dumps({**{k: getattr(cfg, k) for k in keys}, "p_min": r[0], "p_max": r[1], "style": STYLE},
+    extra = {} if cfg.width_scale == "linear" else {"width_scale": cfg.width_scale}   # linear keeps its old caches
+    tag = json.dumps({**{k: getattr(cfg, k) for k in keys}, **extra, "p_min": r[0], "p_max": r[1], "style": STYLE},
                      sort_keys=True)
     return os.path.join(cfg.frames_dir, f"{range_label(r)}-{hashlib.sha1(tag.encode()).hexdigest()[:10]}")
 
@@ -87,6 +90,7 @@ def render_frames(cfg: PairMapMovieConfig, verbose: bool = False) -> dict[tuple[
                 if os.path.isfile(p):
                     continue
                 fc = PairMapConfig(n=ns[k], p_min=r[0], p_max=r[1], width_max=cfg.width_max, decades=cfg.decades,
+                                   width_scale=cfg.width_scale,
                                    workers=cfg.workers, supersample=cfg.supersample, n_label=True,
                                    width_in=cfg.width_in, height_in=cfg.height_in, dpi=cfg.dpi,
                                    output_path=p + ".tmp.png")

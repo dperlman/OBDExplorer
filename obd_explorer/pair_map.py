@@ -44,6 +44,7 @@ class PairMapConfig:
     p_min: float = 0.5
     p_max: float = 0.7
     width_max: float = 8.0              # top of the plot, in units of sqrt(n)
+    width_scale: str = "linear"         # vertical axis: "linear", "sqrt" or "log" (log: from j - i = 1)
     decades: float = 6.0                # blue/red shading range in log10 |u|
     workers: int = 8
     supersample: int = 2                # average k x k samples per pixel (cusps take priority)
@@ -58,6 +59,7 @@ STYLE = 2                               # bump when the drawing changes: cached 
 _MARGIN = {"left": 0.07, "right": 0.17, "bottom": 0.085, "top": 0.115}
 _BLUE_FLOOR, _RED_FLOOR = 0.45, 0.40    # where the Blues / Reds ramps start: L* 72 and 69
 _CUSP_COLOURS = ("#7FFFD4", "#FFFFFF", "#FFEB3B")   # u = -1, -1/2, 0: L* 92, 100, 92
+_SCALE_WORD = {"linear": "/√n", "sqrt": "/√n (square-root scale)", "log": " j − i (log scale)"}
 _EMPTY = 0.5                            # grey, L* 53
 
 
@@ -149,6 +151,35 @@ def downsample(rgb: np.ndarray, cusp: np.ndarray, ss: int) -> np.ndarray:
     return pix
 
 
+def _width_at(t: np.ndarray, n: int, cfg: PairMapConfig) -> np.ndarray:
+    """The width j - i at height t in [0, 1] of the plot."""
+    top = cfg.width_max * math.sqrt(n)
+    if cfg.width_scale == "linear":
+        return t * top
+    if cfg.width_scale == "sqrt":
+        return t * t * top
+    if cfg.width_scale == "log":
+        return top ** t
+    raise ValueError(f"width_scale {cfg.width_scale!r}: use linear, sqrt or log")
+
+
+def _width_ticks(ax, n: int, cfg: PairMapConfig) -> None:
+    """The width axis: linear in width/sqrt(n) as drawn; sqrt and log on a 0..1 image axis, ticks
+    labelled in width/sqrt(n) (sqrt) or in j - i (log)."""
+    top = cfg.width_max * math.sqrt(n)
+    if cfg.width_scale == "log":
+        vals = [v for v in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000) if v <= top]
+        ax.set_yticks([math.log(v) / math.log(top) for v in vals], [str(v) for v in vals])
+        ax.set_ylabel("width j − i  (log scale)")
+        return
+    if cfg.width_scale == "sqrt":
+        vals = [v for v in (0, 0.25, 1, 2, 4, 8, 16, 32, 64, 128) if v <= cfg.width_max]
+        ax.set_yticks([math.sqrt(v / cfg.width_max) for v in vals], [f"{v:g}" for v in vals])
+        ax.set_ylabel("width (j − i) / √n  (square-root scale)")
+        return
+    ax.set_ylabel("width (j − i) / √n")
+
+
 def pair_rgb(U: np.ndarray, C: np.ndarray, n: int, cfg: PairMapConfig, w: int, h: int,
              chunk_rows: int = 64) -> np.ndarray:
     """The (h, w, 3) image, row 0 at width 0, computed a band of rows at a time."""
@@ -160,8 +191,8 @@ def pair_rgb(U: np.ndarray, C: np.ndarray, n: int, cfg: PairMapConfig, w: int, h
     out = np.empty((h, w, 3), np.float32)
     for r0 in range(0, h, chunk_rows):
         r1 = min(r0 + chunk_rows, h)
-        ys = (np.arange(r0 * ss, r1 * ss) + 0.5) / (h * ss) * cfg.width_max
-        m_raw = np.round(ys * math.sqrt(n)).astype(np.int64)[:, None]
+        ts = (np.arange(r0 * ss, r1 * ss) + 0.5) / (h * ss)
+        m_raw = np.round(_width_at(ts, n, cfg)).astype(np.int64)[:, None]
         m = np.clip(m_raw, 1, n - 1)                         # rows past width n-1 (small n) stay empty
         # nearest i + j + 1 = 2(n+1)x with the parity of the width: i + j = n + band, j - i = m
         s0 = np.round((2 * (n + 1) * Xe[None, :] - 1 - m) / 2) * 2 + 1 + m
@@ -193,13 +224,13 @@ def export_pair_map(cfg: PairMapConfig, verbose: bool = False, pool=None, tables
 
     fig = plt.figure(figsize=(fw / cfg.dpi, fh / cfg.dpi), dpi=cfg.dpi, facecolor=FIGURE_BACKGROUND)
     ax = fig.add_axes([left / fw, bottom / fh, w / fw, h / fh])
-    ax.imshow(rgb, extent=[cfg.p_min, cfg.p_max, 0, cfg.width_max], origin="lower", aspect="auto",
-              interpolation="none")
+    top = cfg.width_max if cfg.width_scale == "linear" else 1      # else the image axis runs 0..1
+    ax.imshow(rgb, extent=[cfg.p_min, cfg.p_max, 0, top], origin="lower", aspect="auto", interpolation="none")
+    _width_ticks(ax, n, cfg)
     if cfg.n_label:
         ax.text(0.985, 0.975, f"n = {n}", transform=ax.transAxes, ha="right", va="top", fontsize=22,
                 bbox=dict(facecolor="white", edgecolor="0.6", alpha=0.9, pad=6))
     ax.set_xlabel("grid position (i+j+1) / (2(n+1))  ≈  p*")
-    ax.set_ylabel("width (j − i) / √n")
     bar_w, gap = 0.010, 0.045
     x0 = (left + w) / fw + 0.012
     for k, (cm, norm, label) in enumerate((
@@ -211,7 +242,7 @@ def export_pair_map(cfg: PairMapConfig, verbose: bool = False, pool=None, tables
         cb.set_label(label, fontsize=7)
         cb.ax.tick_params(labelsize=6)
     mirror = ";  below ½: the mirror image, E(p) = E(1−p)" if cfg.p_min < 0.5 else ""
-    fig.suptitle(f"Every tie point of n = {n} in pair space: grid position against width/√n, "
+    fig.suptitle(f"Every tie point of n = {n} in pair space: grid position against width{_SCALE_WORD[cfg.width_scale]}, "
                  f"coloured by u = S₋/κ (the left slope over the slope jump)\n"
                  f"blue: E falls through it (u ≤ −1);  red: E rises (u ≥ 0);  bright: a cusp (−1 < u < 0, "
                  f"certified by OBD-core)\n"
