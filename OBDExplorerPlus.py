@@ -1420,6 +1420,7 @@ def _run_pair_map_movie(args: argparse.Namespace) -> None:
         n_max=args.n_max,
         frames=args.frames,
         spacing=args.spacing,
+        every_n_until=args.every_n_until,
         fps=args.fps,
         hold_end=args.hold_end,
         ranges=tuple(tuple(r) for r in (args.range or [(0.5, 0.7)])),
@@ -1998,6 +1999,9 @@ def main() -> None:
     p_pmm.add_argument("--n-max", type=int, default=8000)
     p_pmm.add_argument("--frames", type=int, default=100, help="Number of n values.")
     p_pmm.add_argument("--spacing", choices=("log", "linear"), default="log", help="How the n values are spaced.")
+    p_pmm.add_argument("--every-n-until", type=int, default=0, metavar="N1",
+                       help="Every n up to N1, then n x (1 + 1/N1) per frame: one new n per frame or more, "
+                            "a steady pace (replaces --frames).")
     p_pmm.add_argument("--fps", type=float, default=10.0)
     p_pmm.add_argument("--hold-end", type=float, default=2.0, help="Seconds the last frame stays up before looping.")
     p_pmm.add_argument("--range", type=float, nargs=2, action="append", metavar=("P_MIN", "P_MAX"),
