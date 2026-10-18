@@ -30,3 +30,5 @@ build/
 Thumbs.db
 # Logs of long plot runs (e.g. cusp-proximity --extend-to).
 /log/*.log
+# Audio rendered by sonification/sonify.py (regenerable, ~14 MB).
+/sonification/out/
