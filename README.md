@@ -134,6 +134,7 @@ from itself. Link any new page or plot from [`docs/index.html`](docs/index.html)
 | `obd_explorer/` | the explorer implementations: HTML builders and exporters (`explorer*_*.py`), headless rendering (`render_headless.py`), the cusp-proximity plot (`cusp_proximity.py`), data loading (`grid.py`, `tie_data.py`, `html_data.py`) |
 | `obd_explorer_qt_ui.py` | the desktop GUI |
 | `plot_*.py` | analysis plots (PDFs into `data/`) |
+| `sonification/` | audio prototypes of the cusp structure (`sonify.py`, five WAVs into `sonification/out/`); see its README |
 | `docs/` | the GitHub Pages site: explorer pages, `plots/`, `index.html` |
 | `data/`, `html/`, `plots/` | generated data and output, not in git (apart from placeholders); `html/` is where `html` writes by default |
 | `log/` | per-run logs from the data builds; new ones are not tracked |
