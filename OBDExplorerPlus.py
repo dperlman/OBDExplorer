@@ -1381,6 +1381,7 @@ def _run_pair_map(args: argparse.Namespace) -> None:
         p_max=args.p_max,
         width_max=args.width_max,
         width_scale=args.width_scale,
+        width_min=args.width_min,
         decades=args.decades,
         workers=args.workers,
         supersample=args.supersample,
@@ -1426,6 +1427,7 @@ def _run_pair_map_movie(args: argparse.Namespace) -> None:
         ranges=tuple(tuple(r) for r in (args.range or [(0.5, 0.7)])),
         width_max=args.width_max,
         width_scale=args.width_scale,
+        width_min=args.width_min,
         supersample=args.supersample,
         workers=args.workers,
         gif_width=args.gif_width,
@@ -1967,6 +1969,8 @@ def main() -> None:
     p_pr.add_argument("--p-min", type=float, default=0.5)
     p_pr.add_argument("--p-max", type=float, default=0.7)
     p_pr.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
+    p_pr.add_argument("--width-min", type=float, default=0.0,
+                       help="Log scale only: a fixed bottom in units of sqrt(n) (default: j - i = 1 for every n).")
     p_pr.add_argument("--width-scale", choices=("linear", "sqrt", "log"), default="linear",
                       help="Vertical axis scale (log runs from j - i = 1).")
     p_pr.add_argument("--decades", type=float, default=6.0, help="Blue/red shading range in log10 |u|.")
@@ -2007,6 +2011,8 @@ def main() -> None:
     p_pmm.add_argument("--range", type=float, nargs=2, action="append", metavar=("P_MIN", "P_MAX"),
                        help="A p range to animate (repeatable; default 0.5 0.7). With several, put {range} in -o.")
     p_pmm.add_argument("--width-max", type=float, default=8.0, help="Top of the plot, in units of sqrt(n).")
+    p_pmm.add_argument("--width-min", type=float, default=0.0,
+                       help="Log scale only: a fixed bottom in units of sqrt(n) (default: j - i = 1 for every n).")
     p_pmm.add_argument("--width-scale", choices=("linear", "sqrt", "log"), default="linear",
                        help="Vertical axis scale (log runs from j - i = 1).")
     p_pmm.add_argument("--supersample", type=int, default=3, help="Average k x k samples per pixel.")
