@@ -44,6 +44,7 @@ class PairMapMovieConfig:
     ranges: tuple[tuple[float, float], ...] = ((0.5, 0.7),)   # (p_min, p_max) per animation
     width_max: float = 8.0
     width_scale: str = "linear"         # "linear", "sqrt" or "log" (pair_map)
+    width_min: float = 0.0              # log only: a fixed bottom in units of sqrt(n) (pair_map)
     decades: float = 6.0
     supersample: int = 3
     workers: int = 8
@@ -75,6 +76,8 @@ def range_label(r: tuple[float, float]) -> str:
 def _frame_dir(cfg: PairMapMovieConfig, r: tuple[float, float]) -> str:
     keys = ("width_max", "decades", "supersample", "width_in", "height_in", "dpi")
     extra = {} if cfg.width_scale == "linear" else {"width_scale": cfg.width_scale}   # linear keeps its old caches
+    if cfg.width_min:
+        extra["width_min"] = cfg.width_min
     tag = json.dumps({**{k: getattr(cfg, k) for k in keys}, **extra, "p_min": r[0], "p_max": r[1], "style": STYLE},
                      sort_keys=True)
     return os.path.join(cfg.frames_dir, f"{range_label(r)}-{hashlib.sha1(tag.encode()).hexdigest()[:10]}")
@@ -102,7 +105,7 @@ def render_frames(cfg: PairMapMovieConfig, verbose: bool = False) -> dict[tuple[
                 if os.path.isfile(p):
                     continue
                 fc = PairMapConfig(n=ns[k], p_min=r[0], p_max=r[1], width_max=cfg.width_max, decades=cfg.decades,
-                                   width_scale=cfg.width_scale,
+                                   width_scale=cfg.width_scale, width_min=cfg.width_min,
                                    workers=cfg.workers, supersample=cfg.supersample, n_label=True,
                                    width_in=cfg.width_in, height_in=cfg.height_in, dpi=cfg.dpi,
                                    output_path=p + ".tmp.png")
