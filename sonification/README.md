@@ -37,8 +37,8 @@ python sonification/soundtrack.py plots/PairMap-0.3-0.7-n3000-3299-log0.2-32.mp4
 
 makes a soundtrack with n as the time axis, one slice of sound per frame. It reads the movie's own
 settings (stamped in the file by `pair-map-movie`), so it lines up with any movie without being told
-the frame list, fps or p range. The sound is exactly as long as the movie's frames; an end hold, if
-the movie has one, is cut off. It writes the mix and two stems (`-sparkle.wav`, `-chord.wav`) to
+the frame list, fps or p range. The sound is exactly as long as the movie, and the movie itself is
+not changed (if it ends on a hold, the last frame's chord holds with it). It writes the mix and two stems (`-sparkle.wav`, `-chord.wav`) to
 `sonification/out/`, plus a copy of the movie with the sound (`-sound.mp4`). About 5 s for a
 300-frame movie.
 

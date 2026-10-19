@@ -3,9 +3,9 @@
     python sonification/soundtrack.py plots/PairMap-0.3-0.7-n3000-3299-log0.2-32.mp4
 
 reads the movie's own settings (the obd:cli_args its encoder stamped in the file), rebuilds its
-frame list (pair_map_movie.movie_n_values), renders a stereo WAV exactly as long as the movie's
-frames and writes a copy of the movie with that sound into sonification/out/.  An end hold, if the
-movie has one, is cut off.  The cusps are the certified ones of OBD-core's shared store; the axis
+frame list (pair_map_movie.movie_n_values), renders a stereo WAV exactly as long as the movie and
+writes a copy of the movie with that sound into sonification/out/; the movie itself is unchanged.
+If it ends on a hold, the last frame's chord holds with it (and fades out in its last 0.1 s).  The cusps are the certified ones of OBD-core's shared store; the axis
 p = 1/2 is left out.  Terms as in the pair-space plots: a pair (i, j) has width j - i, its column
 is i + j, and column k means i + j = n + k (k columns right of the axis; the mirror side is -k).
 
@@ -60,13 +60,13 @@ def movie_settings(path: str) -> dict:
     return json.loads(json.loads(comment)["obd:cli_args"])
 
 
-def movie_schedule(args: dict, path: str) -> tuple[list[int], float, tuple[float, float]]:
-    """(n per frame, fps, (p_min, p_max)) of the movie."""
+def movie_schedule(args: dict, path: str) -> tuple[list[int], float, float, tuple[float, float]]:
+    """(n per frame, fps, hold_end, (p_min, p_max)) of the movie."""
     cfg = PairMapMovieConfig(n_min=args["n_min"], n_max=args["n_max"], frames=args["frames"],
                              spacing=args["spacing"], every_n_until=args.get("every_n_until", 0))
     ranges = [tuple(r) for r in (args.get("range") or [(0.5, 0.7)])]
     r = next((r for r in ranges if f"{r[0]:g}-{r[1]:g}" in os.path.basename(path)), ranges[0])
-    return movie_n_values(cfg), float(args["fps"]), r
+    return movie_n_values(cfg), float(args["fps"]), max(0.0, float(args.get("hold_end", 2.0))), r
 
 
 def frame_cusps(st, n: int, p_range: tuple[float, float], mirror: bool) -> dict:
@@ -91,15 +91,16 @@ def pitch(w: np.ndarray) -> np.ndarray:
     return 110 * 2 ** (1.25 * w)                            # width/sqrt(n) 3 -> 1.5 kHz, 4.2 -> 4.4 kHz
 
 
-def render(ns: list[int], fps: float, p_range: tuple[float, float], wide: float = 2.0, base_hz: float = 55.0,
+def render(ns: list[int], fps: float, hold_end: float, p_range: tuple[float, float], wide: float = 2.0,
+           base_hz: float = 55.0,
            stage: str = "half", stage_max: float = 0.6525, chord_cap_hz: float = 3000.0, ring: float = 0.6,
            verbose: bool = False) -> tuple[np.ndarray, np.ndarray]:
-    """(sparkle, chord) as (samples, 2) stereo arrays, len(ns) / fps seconds long."""
+    """(sparkle, chord) as (samples, 2) stereo arrays, len(ns) / fps + hold_end seconds long."""
     from obd_core import store
 
     st = store.Store()
     hop = SR / fps
-    total = int(round(len(ns) / fps * SR))
+    total = int(round((len(ns) / fps + hold_end) * SR))
     win = np.hanning(int(2 * hop))                          # chord: overlap-add, hop one frame, 50% overlap
     pad = len(win)
     chord = np.zeros(pad + total + 2 * len(win))
@@ -132,6 +133,15 @@ def render(ns: list[int], fps: float, p_range: tuple[float, float], wide: float 
             sparkle[s0:s0 + tail] += (tone * env)[:, None] * gains[None, :]
         if verbose and (f % 50 == 0 or f == len(ns) - 1):
             print(f"  frame {f + 1}/{len(ns)}  n = {n}: {len(x)} chord notes, {int(wd.sum())} wide cusps", flush=True)
+    if hold_end > 0:                                        # the last frame's chord holds, same notes and phase
+        i0 = int(round(len(ns) * hop - hop / 2))
+        tt = (i0 + np.arange(total - i0)) / SR
+        held = (np.sin(2 * np.pi * base_hz * (1 + 2 * x)[:, None] * tt[None, :]) / np.sqrt(1 + 2 * x)[:, None]).sum(0)
+        env_h = np.ones(len(tt))
+        rise = len(win) // 2
+        env_h[:rise] = win[:rise]                           # complements the last frame's falling half-window
+        env_h *= np.clip((len(tt) - np.arange(len(tt))) / (0.1 * SR), 0, 1)
+        chord[pad + i0:pad + total] += held * env_h
     chord = chord[pad:pad + total]
     return sparkle[:total], np.repeat(chord[:, None], 2, axis=1)
 
@@ -159,9 +169,10 @@ def main() -> None:
     ap.add_argument("-o", "--output", help="Movie with sound (default sonification/out/<movie>-sound.mp4).")
     a = ap.parse_args()
 
-    ns, fps, p_range = movie_schedule(movie_settings(a.movie), a.movie)
-    print(f"{a.movie}: {len(ns)} frames, n = {ns[0]}..{ns[-1]}, {fps:g} fps, p in [{p_range[0]:g}, {p_range[1]:g}]")
-    sparkle, chord = render(ns, fps, p_range, wide=a.wide, base_hz=a.base_hz, stage=a.stage,
+    ns, fps, hold_end, p_range = movie_schedule(movie_settings(a.movie), a.movie)
+    print(f"{a.movie}: {len(ns)} frames, n = {ns[0]}..{ns[-1]}, {fps:g} fps, end hold {hold_end:g} s, "
+          f"p in [{p_range[0]:g}, {p_range[1]:g}]")
+    sparkle, chord = render(ns, fps, hold_end, p_range, wide=a.wide, base_hz=a.base_hz, stage=a.stage,
                             stage_max=a.stage_max, verbose=True)
     mix = a.sparkle_gain * norm(sparkle) + a.chord_gain * norm(chord)
     mix *= 0.89 / max(np.abs(mix).max(), 1e-12)
@@ -173,9 +184,8 @@ def main() -> None:
     write_wav(stem + "-chord.wav", 0.89 * norm(chord))
     out = a.output or stem + "-sound.mp4"
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", a.movie, "-i", stem + "-sound.wav",
-                    "-map", "0:v", "-map", "1:a", "-frames:v", str(len(ns)), "-c:v", "copy", "-c:a", "aac",
-                    "-b:a", "192k", "-t", f"{len(ns) / fps:.6f}", "-map_metadata", "0", "-movflags", "+faststart",
-                    out], check=True)
+                    "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                    "-map_metadata", "0", "-movflags", "+faststart", out], check=True)
     print(f"wrote {stem}-sound.wav, -sparkle.wav, -chord.wav ({len(mix) / SR:.2f} s) and {out}")
 
 
