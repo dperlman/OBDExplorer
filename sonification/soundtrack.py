@@ -1,25 +1,29 @@
 """A soundtrack for a pair-map movie: n is the time axis, one slice of sound per frame.
 
-    python sonification/soundtrack.py plots/PairMap-n50-10000-sqrt32.mp4
+    python sonification/soundtrack.py plots/PairMap-0.3-0.7-n3000-3299-log0.2-32.mp4
 
 reads the movie's own settings (the obd:cli_args its encoder stamped in the file), rebuilds its
-frame list (pair_map_movie.movie_n_values), renders a stereo WAV of exactly the movie's length and
-writes a copy of the movie with that sound into sonification/out/.  The tie points are the certified
-cusps of OBD-core's shared store; the axis p = 1/2 is left out.
+frame list (pair_map_movie.movie_n_values), renders a stereo WAV exactly as long as the movie's
+frames and writes a copy of the movie with that sound into sonification/out/.  An end hold, if the
+movie has one, is cut off.  The cusps are the certified ones of OBD-core's shared store; the axis
+p = 1/2 is left out.  Terms as in the pair-space plots: a pair (i, j) has width j - i, its column
+is i + j, and column k means i + j = n + k (k columns right of the axis; the mirror side is -k).
 
 Two layers, also written as separate WAVs (stems) for mixing elsewhere:
 
-    sparkle   every wide cusp (z = (j-i)/(2 sqrt(npq)) >= z_wide; there are none between ~1.3 and 3)
-              of the frame is a short bell ping: pitch = height in the picture (z, log scale, ~1.6 to
-              ~4.5 kHz), stereo position = where it sits across the picture (p from p_min to p_max,
-              its mirror 1 - p too when the range reaches below 1/2), brightness = how lopsided its
-              V is (|2u + 1|: a white, symmetric cusp is a pure tone, an aquamarine or yellow one
-              carries a strong inharmonic overtone).  Onsets are spread over the frame.
-    bed       the ordinary cusps near p = 1/2 as a held chord: a cusp at x = n(p - 1/2) sounds
-              harmonic 1 + 2x of base_hz (band m ~ harmonic 2m + 1), as clip 4 of sonify.py, cross-
-              faded frame to frame.  It settles as the bands lock in (n-invariance) and then holds.
-
-During the movie's end hold (hold_end) the last frame's bed sustains and fades.
+    sparkle   every wide cusp of the frame (width >= wide * sqrt(n); the cusp curve's cusps stay
+              below ~1.25 sqrt(n) and the wide ones, on the lower edges of the blue arcs, sit at
+              ~3-4.2 sqrt(n), nothing in between) is a short bell ping: pitch from width/sqrt(n)
+              (log scale: 3 -> ~1.5 kHz, 4.2 -> ~4.4 kHz), stereo position from where it sits across
+              the picture (p from p_min to p_max, its mirror 1 - p too when the range reaches below
+              1/2), brightness from its cusp colour (u): a white, symmetric cusp is a pure tone, an
+              aquamarine or yellow one carries a strong inharmonic overtone.  Onsets are spread
+              over the frame.
+    chord     the cusps on the cusp curve as one held chord, one note per column: a cusp at p*
+              sounds 1 + 2 n (p* - 1/2) times base_hz, which for column k is about harmonic k + 1
+              (column 1 the fundamental), nudged by the tie point's offset from its grid position.
+              A column with two cusps gives two close notes that beat.  Cross-faded frame to frame;
+              it builds as columns fill in at small n and then holds (the n-invariance).
 """
 
 from __future__ import annotations
@@ -51,84 +55,73 @@ def movie_settings(path: str) -> dict:
     return json.loads(json.loads(comment)["obd:cli_args"])
 
 
-def movie_schedule(args: dict, path: str) -> tuple[list[int], float, float, tuple[float, float]]:
-    """(n per frame, fps, hold_end, (p_min, p_max)) of the movie."""
+def movie_schedule(args: dict, path: str) -> tuple[list[int], float, tuple[float, float]]:
+    """(n per frame, fps, (p_min, p_max)) of the movie."""
     cfg = PairMapMovieConfig(n_min=args["n_min"], n_max=args["n_max"], frames=args["frames"],
                              spacing=args["spacing"], every_n_until=args.get("every_n_until", 0))
     ranges = [tuple(r) for r in (args.get("range") or [(0.5, 0.7)])]
     r = next((r for r in ranges if f"{r[0]:g}-{r[1]:g}" in os.path.basename(path)), ranges[0])
-    return movie_n_values(cfg), float(args["fps"]), float(args.get("hold_end", 2.0)), r
+    return movie_n_values(cfg), float(args["fps"]), r
 
 
 def frame_cusps(st, n: int, p_range: tuple[float, float]) -> dict:
-    """The cusps of n inside p_range (mirrors 1 - p included), with z and the kink position u."""
+    """The cusps of n inside p_range (mirrors 1 - p included), with width/sqrt(n) and u."""
     c = st.cusps(n, columns=["i", "j", "pstar", "decided_by", "S_minus", "ln_fi"])
     k = c["decided_by"] != "symmetry"
-    p, w, sm, lfi = c["pstar"][k], (c["j"] - c["i"])[k].astype(float), c["S_minus"][k], c["ln_fi"][k]
-    u = np.sign(sm) * np.exp(np.clip(np.log(np.abs(sm) + 1e-300) - np.log(w) - lfi, -700, 700))
-    z = w / (2 * np.sqrt(n * p * (1 - p)))
+    p, m, sm, lfi = c["pstar"][k], (c["j"] - c["i"])[k].astype(float), c["S_minus"][k], c["ln_fi"][k]
+    u = np.sign(sm) * np.exp(np.clip(np.log(np.abs(sm) + 1e-300) - np.log(m) - lfi, -700, 700))
     p = np.concatenate([p, 1 - p])                          # E(p) = E(1-p): (i, j) at p mirrors to 1 - p
-    z, u = np.concatenate([z, z]), np.concatenate([u, -1 - u])
-    keep = (p >= p_range[0]) & (p <= p_range[1]) & (p != 0.5)
-    return dict(p=p[keep], z=z[keep], u=u[keep])
+    w = np.concatenate([m, m]) / np.sqrt(n)
+    u = np.concatenate([u, -1 - u])
+    keep = (p >= p_range[0]) & (p <= p_range[1])
+    return dict(p=p[keep], w=w[keep], u=u[keep])
 
 
-def pitch(z: np.ndarray) -> np.ndarray:
-    return 110 * 2 ** (z / 3.6 * 4.5)                       # sonify.py clip 1: z = 3 -> 1.6 kHz, 4.2 -> 4.5 kHz
+def pitch(w: np.ndarray) -> np.ndarray:
+    return 110 * 2 ** (1.25 * w)                            # width/sqrt(n) 3 -> 1.5 kHz, 4.2 -> 4.4 kHz
 
 
-def render(ns: list[int], fps: float, hold_end: float, p_range: tuple[float, float], z_wide: float = 2.0,
-           base_hz: float = 55.0, bed_cap_hz: float = 3000.0, ring: float = 0.6, verbose: bool = False
-           ) -> tuple[np.ndarray, np.ndarray]:
-    """(sparkle, bed) as (samples, 2) stereo arrays of the movie's exact length."""
+def render(ns: list[int], fps: float, p_range: tuple[float, float], wide: float = 2.0, base_hz: float = 55.0,
+           chord_cap_hz: float = 3000.0, ring: float = 0.6, verbose: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """(sparkle, chord) as (samples, 2) stereo arrays, len(ns) / fps seconds long."""
     from obd_core import store
 
     st = store.Store()
     hop = SR / fps
-    total = int(round((len(ns) / fps + max(hold_end, 0)) * SR))
-    sparkle = np.zeros((total + int(ring * SR), 2))
-    win = np.hanning(int(2 * hop))                          # bed: overlap-add, hop one frame, 50% overlap
+    total = int(round(len(ns) / fps * SR))
+    win = np.hanning(int(2 * hop))                          # chord: overlap-add, hop one frame, 50% overlap
     pad = len(win)
-    bed = np.zeros(pad + total + 2 * len(win))
+    chord = np.zeros(pad + total + 2 * len(win))
     tail = int(ring * SR)
+    sparkle = np.zeros((total + tail, 2))
     t_ring = np.arange(tail) / SR
     env = (1 - np.exp(-t_ring / 0.002)) * np.exp(-t_ring / 0.12)
     for f, n in enumerate(ns):
         c = frame_cusps(st, n, p_range)
         t0 = f * hop
-        # bed: ordinary cusps near 1/2 as harmonics 1 + 2x of base_hz (phase from absolute time)
-        x = n * np.abs(c["p"][c["z"] < z_wide] - 0.5)
-        x = np.unique(np.round(x, 9))                       # a mirror pair is one partial, not two
-        x = x[base_hz * (1 + 2 * x) < bed_cap_hz]
-        i0 = int(round(t0 - hop / 2))                       # window centred on the frame; bed starts pad early
+        # chord: the cusp curve's cusps, one note per column (phase from absolute time)
+        x = n * np.abs(c["p"][c["w"] < wide] - 0.5)
+        x = np.unique(np.round(x, 9))                       # a cusp and its mirror are one note
+        x = x[base_hz * (1 + 2 * x) < chord_cap_hz]
+        i0 = int(round(t0 - hop / 2))                       # window centred on the frame
         tt = (i0 + np.arange(len(win))) / SR
         seg = (np.sin(2 * np.pi * base_hz * (1 + 2 * x)[:, None] * tt[None, :]) / np.sqrt(1 + 2 * x)[:, None]).sum(0)
-        bed[pad + i0:pad + i0 + len(win)] += seg * win
+        chord[pad + i0:pad + i0 + len(win)] += seg * win
         # sparkle: wide cusps as pings, onsets spread over the frame, deterministic per n
-        wide = c["z"] >= z_wide
+        wd = c["w"] >= wide
         rng = np.random.default_rng(n)
-        for p, z, u, d in zip(c["p"][wide], c["z"][wide], c["u"][wide], rng.random(wide.sum())):
-            fz = pitch(z)
-            a = min(1.0, abs(2 * u + 1))                    # 0 symmetric (white) .. 1 lopsided
-            tone = np.sin(2 * np.pi * fz * t_ring) + 0.6 * a * np.sin(2 * np.pi * 2.76 * fz * t_ring)
+        for p, w, u, d in zip(c["p"][wd], c["w"][wd], c["u"][wd], rng.random(wd.sum())):
+            fw = pitch(w)
+            a = min(1.0, abs(2 * u + 1))                    # 0 white (symmetric V) .. 1 aquamarine / yellow
+            tone = np.sin(2 * np.pi * fw * t_ring) + 0.6 * a * np.sin(2 * np.pi * 2.76 * fw * t_ring)
             pan = (p - p_range[0]) / (p_range[1] - p_range[0])
             gains = np.array([np.cos(pan * np.pi / 2), np.sin(pan * np.pi / 2)])
             s0 = int(t0 + d * hop)
             sparkle[s0:s0 + tail] += (tone * env)[:, None] * gains[None, :]
         if verbose and (f % 50 == 0 or f == len(ns) - 1):
-            print(f"  frame {f + 1}/{len(ns)}  n = {n}: {len(x)} bed partials, {int(wide.sum())} wide cusps",
-                  flush=True)
-    # end hold: the last frame's chord held (same partials, continuous phase) and faded out
-    if hold_end > 0:
-        i0 = int(round(len(ns) * hop - hop / 2))
-        tt = (i0 + np.arange(total - i0)) / SR
-        hold = (np.sin(2 * np.pi * base_hz * (1 + 2 * x)[:, None] * tt[None, :]) / np.sqrt(1 + 2 * x)[:, None]).sum(0)
-        fade = np.r_[np.hanning(len(win))[:len(win) // 2], np.ones(max(0, len(tt) - len(win) // 2))][:len(tt)]
-        fade *= np.minimum(1, (len(tt) - np.arange(len(tt))) / (0.5 * hold_end * SR))
-        bed[pad + i0:pad + total] += hold * fade
-    bed = bed[pad:pad + total]
-    sparkle = sparkle[:total]
-    return sparkle, np.repeat(bed[:, None], 2, axis=1)
+            print(f"  frame {f + 1}/{len(ns)}  n = {n}: {len(x)} chord notes, {int(wd.sum())} wide cusps", flush=True)
+    chord = chord[pad:pad + total]
+    return sparkle[:total], np.repeat(chord[:, None], 2, axis=1)
 
 
 def norm(x: np.ndarray) -> np.ndarray:
@@ -142,30 +135,30 @@ def write_wav(path: str, x: np.ndarray) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("movie", help="A pair-map-movie .mp4 (its settings are read from the file).")
-    ap.add_argument("--z-wide", type=float, default=2.0, help="Cusps at least this wide (in sd) sparkle.")
+    ap.add_argument("--wide", type=float, default=2.0, help="Cusps at least this wide, in units of sqrt(n), sparkle.")
     ap.add_argument("--sparkle-gain", type=float, default=0.8)
-    ap.add_argument("--bed-gain", type=float, default=0.45)
-    ap.add_argument("--base-hz", type=float, default=55.0, help="The bed's fundamental.")
+    ap.add_argument("--chord-gain", type=float, default=0.45)
+    ap.add_argument("--base-hz", type=float, default=55.0, help="The chord's fundamental (column 1).")
     ap.add_argument("-o", "--output", help="Movie with sound (default sonification/out/<movie>-sound.mp4).")
     a = ap.parse_args()
 
-    ns, fps, hold_end, p_range = movie_schedule(movie_settings(a.movie), a.movie)
-    print(f"{a.movie}: {len(ns)} frames, n = {ns[0]}..{ns[-1]}, {fps:g} fps, hold {hold_end:g} s, "
-          f"p in [{p_range[0]:g}, {p_range[1]:g}]")
-    sparkle, bed = render(ns, fps, hold_end, p_range, z_wide=a.z_wide, base_hz=a.base_hz, verbose=True)
-    mix = a.sparkle_gain * norm(sparkle) + a.bed_gain * norm(bed)
+    ns, fps, p_range = movie_schedule(movie_settings(a.movie), a.movie)
+    print(f"{a.movie}: {len(ns)} frames, n = {ns[0]}..{ns[-1]}, {fps:g} fps, p in [{p_range[0]:g}, {p_range[1]:g}]")
+    sparkle, chord = render(ns, fps, p_range, wide=a.wide, base_hz=a.base_hz, verbose=True)
+    mix = a.sparkle_gain * norm(sparkle) + a.chord_gain * norm(chord)
     mix *= 0.89 / max(np.abs(mix).max(), 1e-12)
 
     os.makedirs(OUT, exist_ok=True)
     stem = os.path.join(OUT, os.path.splitext(os.path.basename(a.movie))[0])
     write_wav(stem + "-sound.wav", mix)
     write_wav(stem + "-sparkle.wav", 0.89 * norm(sparkle))
-    write_wav(stem + "-bed.wav", 0.89 * norm(bed))
+    write_wav(stem + "-chord.wav", 0.89 * norm(chord))
     out = a.output or stem + "-sound.mp4"
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", a.movie, "-i", stem + "-sound.wav",
-                    "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                    "-map_metadata", "0", "-movflags", "+faststart", out], check=True)
-    print(f"wrote {stem}-sound.wav, -sparkle.wav, -bed.wav ({len(mix) / SR:.2f} s) and {out}")
+                    "-map", "0:v", "-map", "1:a", "-frames:v", str(len(ns)), "-c:v", "copy", "-c:a", "aac",
+                    "-b:a", "192k", "-t", f"{len(ns) / fps:.6f}", "-map_metadata", "0", "-movflags", "+faststart",
+                    out], check=True)
+    print(f"wrote {stem}-sound.wav, -sparkle.wav, -chord.wav ({len(mix) / SR:.2f} s) and {out}")
 
 
 if __name__ == "__main__":
