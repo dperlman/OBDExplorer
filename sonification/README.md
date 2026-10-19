@@ -43,7 +43,7 @@ the movie has one, is cut off. It writes the mix and two stems (`-sparkle.wav`, 
 300-frame movie.
 
 - **Sparkle**: each wide cusp in the frame (width ≥ 2√n) is a short bell ping. Pitch from
-  width/√n (3 → ~1.5 kHz, 4.2 → ~4.4 kHz), left–right from where it sits across the picture,
+  width/√n (3 → ~1.5 kHz, 4.2 → ~4.4 kHz), left–right from its p* (see the stage, below),
   brightness from its cusp colour (white, a symmetric V, is a pure tone; aquamarine or yellow adds an
   inharmonic overtone). Wide cusps flicker: from one n to the next none survives as the same pair,
   and about a third have a neighbour within one column. They start at n = 59 and grow to ~12 per
@@ -53,6 +53,14 @@ the movie has one, is cut off. It writes the mix and two stems (`-sparkle.wav`, 
   two cusps (about one in six) gives two close notes that beat. It builds while columns fill in at
   small n, then holds: the n-invariance.
 
-`--wide`, `--sparkle-gain`, `--chord-gain` and `--base-hz` adjust it.
+**The stereo stage.** The cusps are mirror-symmetric about p = ½, so the half p ≥ ½ holds all the
+information. By default (`--stage half`) each cusp pings once, panned from p = ½ (left) to
+`--stage-max` (right; default 0.6525, the S5 cusp limit), whichever side of the picture it is drawn
+on. Wide cusps bunch toward the end of the cusp curve (at n = 3000–3299 they sit at p* 0.53–0.652,
+median 0.63), so the sparkle leans right. `--stage mirror` pans across the picture instead (p_min
+left, p_max right): a cusp drawn on both sides of ½ pings twice, mirrored, which is balanced but
+says nothing new; those files get `-mirror` in their names.
+
+`--wide`, `--sparkle-gain`, `--chord-gain` and `--base-hz` adjust the rest.
 
 Ideas not yet done: extend clip 4 past n = 300 (the store has certified cusps to 10,000).

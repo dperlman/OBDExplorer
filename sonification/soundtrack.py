@@ -14,9 +14,8 @@ Two layers, also written as separate WAVs (stems) for mixing elsewhere:
     sparkle   every wide cusp of the frame (width >= wide * sqrt(n); the cusp curve's cusps stay
               below ~1.25 sqrt(n) and the wide ones, on the lower edges of the blue arcs, sit at
               ~3-4.2 sqrt(n), nothing in between) is a short bell ping: pitch from width/sqrt(n)
-              (log scale: 3 -> ~1.5 kHz, 4.2 -> ~4.4 kHz), stereo position from where it sits across
-              the picture (p from p_min to p_max, its mirror 1 - p too when the range reaches below
-              1/2), brightness from its cusp colour (u): a white, symmetric cusp is a pure tone, an
+              (log scale: 3 -> ~1.5 kHz, 4.2 -> ~4.4 kHz), stereo position from its p* (below),
+              brightness from its cusp colour (u): a white, symmetric cusp is a pure tone, an
               aquamarine or yellow one carries a strong inharmonic overtone.  Onsets are spread
               over the frame.
     chord     the cusps on the cusp curve as one held chord, one note per column: a cusp at p*
@@ -24,6 +23,12 @@ Two layers, also written as separate WAVs (stems) for mixing elsewhere:
               (column 1 the fundamental), nudged by the tie point's offset from its grid position.
               A column with two cusps gives two close notes that beat.  Cross-faded frame to frame;
               it builds as columns fill in at small n and then holds (the n-invariance).
+
+The stereo stage.  The cusps are mirror-symmetric about p = 1/2 (E(p) = E(1-p)), so the half
+p >= 1/2 holds all the information.  stage "half" (the default) sounds each cusp once, panned from
+p = 1/2 (left) to stage_max (right; default 0.6525, the S5 cusp limit, so the cusps use the whole
+stage), whichever side of the picture it is drawn on.  stage "mirror" pans across the picture
+instead (p_min left, p_max right), so a cusp drawn on both sides of 1/2 pings twice, mirrored.
 """
 
 from __future__ import annotations
@@ -64,15 +69,20 @@ def movie_schedule(args: dict, path: str) -> tuple[list[int], float, tuple[float
     return movie_n_values(cfg), float(args["fps"]), r
 
 
-def frame_cusps(st, n: int, p_range: tuple[float, float]) -> dict:
-    """The cusps of n inside p_range (mirrors 1 - p included), with width/sqrt(n) and u."""
+def frame_cusps(st, n: int, p_range: tuple[float, float], mirror: bool) -> dict:
+    """The cusps of n drawn in the picture, with width/sqrt(n) and u: with mirror, every cusp inside
+    p_range (mirrors 1 - p included); without, each cusp once at its p* >= 1/2, if either it or its
+    mirror is inside p_range."""
     c = st.cusps(n, columns=["i", "j", "pstar", "decided_by", "S_minus", "ln_fi"])
     k = c["decided_by"] != "symmetry"
     p, m, sm, lfi = c["pstar"][k], (c["j"] - c["i"])[k].astype(float), c["S_minus"][k], c["ln_fi"][k]
     u = np.sign(sm) * np.exp(np.clip(np.log(np.abs(sm) + 1e-300) - np.log(m) - lfi, -700, 700))
+    w = m / np.sqrt(n)
+    if not mirror:
+        keep = ((p >= p_range[0]) & (p <= p_range[1])) | ((1 - p >= p_range[0]) & (1 - p <= p_range[1]))
+        return dict(p=p[keep], w=w[keep], u=u[keep])
     p = np.concatenate([p, 1 - p])                          # E(p) = E(1-p): (i, j) at p mirrors to 1 - p
-    w = np.concatenate([m, m]) / np.sqrt(n)
-    u = np.concatenate([u, -1 - u])
+    w, u = np.concatenate([w, w]), np.concatenate([u, -1 - u])
     keep = (p >= p_range[0]) & (p <= p_range[1])
     return dict(p=p[keep], w=w[keep], u=u[keep])
 
@@ -82,7 +92,8 @@ def pitch(w: np.ndarray) -> np.ndarray:
 
 
 def render(ns: list[int], fps: float, p_range: tuple[float, float], wide: float = 2.0, base_hz: float = 55.0,
-           chord_cap_hz: float = 3000.0, ring: float = 0.6, verbose: bool = False) -> tuple[np.ndarray, np.ndarray]:
+           stage: str = "half", stage_max: float = 0.6525, chord_cap_hz: float = 3000.0, ring: float = 0.6,
+           verbose: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """(sparkle, chord) as (samples, 2) stereo arrays, len(ns) / fps seconds long."""
     from obd_core import store
 
@@ -96,8 +107,9 @@ def render(ns: list[int], fps: float, p_range: tuple[float, float], wide: float 
     sparkle = np.zeros((total + tail, 2))
     t_ring = np.arange(tail) / SR
     env = (1 - np.exp(-t_ring / 0.002)) * np.exp(-t_ring / 0.12)
+    left, right = (0.5, stage_max) if stage == "half" else p_range
     for f, n in enumerate(ns):
-        c = frame_cusps(st, n, p_range)
+        c = frame_cusps(st, n, p_range, mirror=stage == "mirror")
         t0 = f * hop
         # chord: the cusp curve's cusps, one note per column (phase from absolute time)
         x = n * np.abs(c["p"][c["w"] < wide] - 0.5)
@@ -114,7 +126,7 @@ def render(ns: list[int], fps: float, p_range: tuple[float, float], wide: float 
             fw = pitch(w)
             a = min(1.0, abs(2 * u + 1))                    # 0 white (symmetric V) .. 1 aquamarine / yellow
             tone = np.sin(2 * np.pi * fw * t_ring) + 0.6 * a * np.sin(2 * np.pi * 2.76 * fw * t_ring)
-            pan = (p - p_range[0]) / (p_range[1] - p_range[0])
+            pan = min(1.0, max(0.0, (p - left) / (right - left)))
             gains = np.array([np.cos(pan * np.pi / 2), np.sin(pan * np.pi / 2)])
             s0 = int(t0 + d * hop)
             sparkle[s0:s0 + tail] += (tone * env)[:, None] * gains[None, :]
@@ -139,17 +151,23 @@ def main() -> None:
     ap.add_argument("--sparkle-gain", type=float, default=0.8)
     ap.add_argument("--chord-gain", type=float, default=0.45)
     ap.add_argument("--base-hz", type=float, default=55.0, help="The chord's fundamental (column 1).")
+    ap.add_argument("--stage", choices=("half", "mirror"), default="half",
+                    help="half: each cusp once, panned from p = 1/2 to --stage-max; mirror: across the picture, "
+                         "a cusp and its mirror both.")
+    ap.add_argument("--stage-max", type=float, default=0.6525,
+                    help="half: the p at the right of the stage (default the S5 cusp limit).")
     ap.add_argument("-o", "--output", help="Movie with sound (default sonification/out/<movie>-sound.mp4).")
     a = ap.parse_args()
 
     ns, fps, p_range = movie_schedule(movie_settings(a.movie), a.movie)
     print(f"{a.movie}: {len(ns)} frames, n = {ns[0]}..{ns[-1]}, {fps:g} fps, p in [{p_range[0]:g}, {p_range[1]:g}]")
-    sparkle, chord = render(ns, fps, p_range, wide=a.wide, base_hz=a.base_hz, verbose=True)
+    sparkle, chord = render(ns, fps, p_range, wide=a.wide, base_hz=a.base_hz, stage=a.stage,
+                            stage_max=a.stage_max, verbose=True)
     mix = a.sparkle_gain * norm(sparkle) + a.chord_gain * norm(chord)
     mix *= 0.89 / max(np.abs(mix).max(), 1e-12)
 
     os.makedirs(OUT, exist_ok=True)
-    stem = os.path.join(OUT, os.path.splitext(os.path.basename(a.movie))[0])
+    stem = os.path.join(OUT, os.path.splitext(os.path.basename(a.movie))[0] + ("-mirror" if a.stage == "mirror" else ""))
     write_wav(stem + "-sound.wav", mix)
     write_wav(stem + "-sparkle.wav", 0.89 * norm(sparkle))
     write_wav(stem + "-chord.wav", 0.89 * norm(chord))
